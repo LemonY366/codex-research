@@ -20,6 +20,40 @@ uv sync
 
 数值、表格和实证性结论必须可追溯到相应实验 ID 与运行目录；不可核实的信息标记为 `TODO`。
 
+若 `RESEARCH.md` 与 `TODO.md` 尚未提供足够完整的研究目标、约束和下一步行动，Codex 会先与用户进行头脑风暴，确认问题、成功标准、数据、基线、预算与第一阶段产物后再开始实施。
+
+## 三阶段推荐模型与命令
+
+模型选择应服从任务难度与成本预算；以下是本项目的默认建议。可用模型和推理等级取决于账号与所用 Codex 客户端。
+
+### 阶段一：调研与设计
+
+初始的 1–3 轮头脑风暴使用 **GPT-5.6 Sol / Ultra**，处理开放式问题定义、研究空白与方案取舍；在方向明确后切换到 **GPT-5.6 Sol / Medium**，以较低成本完善 `RESEARCH.md` 和 `TODO.md`。
+
+可先使用普通对话或 `/plan`，例如：
+
+```text
+/plan 阅读 RESEARCH.md 和 TODO.md；与我头脑风暴研究xx问题、成功标准、数据集、基线、预算和阶段一交付物。确认后更新这两个文件。
+```
+
+### 阶段二：实验与分析
+
+选择 **GPT-5.6 Terra / Low**，然后使用 `/goal` 执行已定义、可验证的实验任务：
+
+```text
+/goal 执行 TODO.md 中的第二阶段“实验与分析”。记录期间的命令、文档、指标和失败原因等信息。
+```
+
+### 阶段三：论文写作（可选专利）
+
+继续使用 **GPT-5.6 Terra / Low**，以 `/goal` 将已验证实验结果写入唯一工作草稿 `paper/draft_zh.md`：
+
+```text
+/goal 根据已验证的 experiments/runs/ 结果完成 TODO.md 中“阶段三：论文写作”的事项。所有数值和实验结论必须标注实验 ID；默认只修改 paper/draft_zh.md，无法核实的信息标记 TODO。
+```
+
+专利工作仅在用户明确要求时加入阶段三。`/goal` 的目标应包含成果、约束与可验证的完成条件；可使用 `/goal edit`、`/goal pause`、`/goal resume` 和 `/goal clear` 管理运行中的目标。更多说明见 [Codex 模型选择](https://developers.openai.com/codex/codex-manual.md#model-selection) 与 [Goal 模式](https://developers.openai.com/codex/codex-manual.md#set-or-view-a-task-goal-with-goal)。
+
 ## 目录说明
 
 ```text
@@ -39,6 +73,10 @@ docs/                # 稳定、跨阶段的项目规范
 ```
 
 进入某个目录前，优先阅读该目录的 `README.md`。在仓库根目录启动 Codex 时，它应遵循 [AGENTS.md](AGENTS.md)。
+
+## 观察进展
+
+用户可随时查看 [TODO.md](TODO.md) 了解三个阶段的当前进展：调研与设计、实验与分析、论文写作（可选专利成果整理）。默认阶段三只进行论文写作；只有用户明确要求时才新增专利工作。执行任务时应及时更新各阶段的进行中、下一步和已完成事项；研究目标、约束和长期决策仍维护在 `RESEARCH.md`。
 
 ## 文档维护
 
