@@ -5,19 +5,23 @@ build/
 dist/
 wheels/
 *.egg-info
-
-# Virtual environments
-.venv
+.venv/
 worktrees/
-results/
 queue/
-
-# Agent prompt files (generated per-session by launchers)
-CLAUDE.md
-AGENTS.md
-
-# Experimental code/artifacts
 dev/
-
-# Results file
 results.tsv
+
+# Secrets
+.env
+.env.*
+!.env.example
+
+# Local research assets and generated run data
+datasets/*
+!datasets/README.md
+
+models/*
+!models/README.md
+
+experiments/runs/*
+!experiments/runs/README.md
