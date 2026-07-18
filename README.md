@@ -4,11 +4,17 @@
 
 ## 快速开始
 
+克隆项目并在项目目录中直接启动 Codex：
+
 ```bash
-uv sync
+git clone git@github.com:linhx1999/codex-research.git
+cd codex-research
+codex
 ```
 
-如需访问外部服务，可复制 `.env.example` 为 `.env` 并填写本地值。`.env` 不应被读取、输出或提交；数据集、模型和运行产物的存放规则见对应目录的 README。
+后续研究、实验和写作均通过与 Codex 的提示词交互完成。首次进入项目时，可让 Codex 阅读 `README.md`、`RESEARCH.md` 和 `TODO.md`，并根据当前状态与用户头脑风暴或继续已有工作；无需手动执行常规安装、实验或写作命令。已有克隆时，直接在其项目目录运行 `codex` 即可。
+
+敏感配置是例外：API key、令牌、数据库凭据和受限数据访问应由用户自行在本地完成配置，例如按需创建 `.env`。不要在对话、提示词、日志或提交中提供真实密钥；`.env` 不应被 Codex 读取、输出或提交。数据集、模型和运行产物的存放规则见对应目录的 README。
 
 ## 工作流程
 

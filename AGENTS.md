@@ -20,6 +20,8 @@ Before beginning research or experiments, inspect both `RESEARCH.md` and `TODO.m
 
 Use GPT-5.6 Sol with Ultra reasoning for the first 1–3 open-ended brainstorming rounds, then Sol with Medium reasoning to finalize stage-one documents. For stage two and stage three, use GPT-5.6 Terra with Low reasoning and a `/goal` objective tied to the relevant `TODO.md` phase. Goals must name the expected outcome, constraints, and verification criteria. Patent work remains opt-in and requires an explicit user request.
 
+Users normally clone the repository, enter its relative project directory, launch `codex` from the repository root, and interact through prompts; do not require them to run routine setup, experiment, or writing commands manually. Treat API keys, tokens, database credentials, and restricted-data access as user-managed setup. Do not ask users to paste secrets or read `.env` files.
+
 Do not modify `.agents/` unless the task explicitly requests it. Read the nearest directory README before adding files.
 
 ## Build, Test, and Development Commands
