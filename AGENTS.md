@@ -12,7 +12,7 @@
 
 ## Project Structure & Module Organization
 
-Keep the research contract in `RESEARCH.md` and active work in `TODO.md`. Put reusable paper-method, training, and evaluation code in `src/`; put externally cloned comparison-method source in `baselines/` and pin its upstream revision; put data preparation and environment helpers in `scripts/`. Each concrete experiment needs a standalone entry script in `experiments/scripts/` and an immutable run record in `experiments/runs/<run-id>/`. Draft prose belongs in `paper/draft_zh.md`; edit `paper/main.tex` only when explicitly preparing the formal manuscript. Store paper-ready figures and their sources in `paper/images/`.
+Keep the research contract in `RESEARCH.md` and active work in `TODO.md`. Put reusable paper-method, training, and evaluation code in `src/`; put externally cloned comparison-method source in `baselines/` and pin its upstream revision; put data preparation and environment helpers in `scripts/`. Each concrete experiment needs a standalone entry script in `experiments/scripts/` and an immutable run record in `experiments/runs/<run-id>/`. Draft prose belongs in `paper/draft_zh.md`; edit `paper/main.tex` only when explicitly preparing the formal manuscript. Store paper-ready figures and their sources in `paper/images/`. Store patent technical disclosures, claim drafts, prior-art notes, and patent figures in `patents/`; do not represent a draft as legal advice or a filing-ready application.
 
 Do not modify `.agents/` unless the task explicitly requests it. Read the nearest directory README before adding files.
 
