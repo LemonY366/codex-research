@@ -24,6 +24,12 @@ Users normally clone the repository, enter its relative project directory, launc
 
 Do not modify `.agents/` unless the task explicitly requests it. Read the nearest directory README before adding files.
 
+## Stage Gates
+
+`docs/WORKFLOW_GATES.md` is the authoritative protocol for entering, completing, pausing, resuming, and rolling back the three research phases. Read it before beginning a phase or changing phase status. Do not perform substantive work in a later phase until its entry gate passes. At every transition, update the current phase, status, gate result, pause reason, and resume condition in `TODO.md`; record user confirmations, scope changes, privacy decisions, and other durable decisions in `RESEARCH.md`.
+
+Treat missing authority, unresolved data licensing or privacy, unapproved external data transfer, missing required access, and material scope changes as pause conditions. Data not explicitly approved for external transfer must remain local. Minimize any approved transfer, redact personal or restricted content as agreed, and inspect both inputs and external-service outputs before persisting or publishing them. A negative result or an unmet target does not by itself prevent phase completion when the agreed evaluation is complete and the evidence is intact. When a writing claim lacks evidence, roll back to experiments; when the research question, data, metric, budget, or scope changes materially, roll back to research and design. Never erase or rewrite historical run evidence during a rollback.
+
 ## Experiment Resources
 
 Experiments may use a local GPU, an external model API, or both in the same run. External model APIs currently target OpenAI-compatible interfaces. During experiment design, define the separate role of each resource and their data flow, record the intended use in `RESEARCH.md` and the actionable preparation in `TODO.md`, and confirm the GPU-time and external-API budgets with the user before execution. Do not impose a fixed API/GPU split when the research question calls for a different design. Every experiment script must include a top-level docstring declaring its experiment ID and purpose, API and GPU usage and roles, their data flow, applicable budgets, inputs, outputs, and run command; follow `experiments/scripts/README.md` for the exact template.
