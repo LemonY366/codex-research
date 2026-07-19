@@ -24,6 +24,18 @@ Users normally clone the repository, enter its relative project directory, launc
 
 Do not modify `.agents/` unless the task explicitly requests it. Read the nearest directory README before adding files.
 
+## Experiment Resources
+
+Experiments may use a local GPU, an external model API, or both in the same run. External model APIs currently target OpenAI-compatible interfaces. During experiment design, define the separate role of each resource and their data flow, record the intended use in `RESEARCH.md` and the actionable preparation in `TODO.md`, and confirm the GPU-time and external-API budgets with the user before execution. Do not impose a fixed API/GPU split when the research question calls for a different design. Every experiment script must include a top-level docstring declaring its experiment ID and purpose, API and GPU usage and roles, their data flow, applicable budgets, inputs, outputs, and run command; follow `experiments/scripts/README.md` for the exact template.
+
+Before launching a run, check the required resources independently. For GPU work, verify the selected device and record the GPU model, CUDA version, PyTorch version, available or relevant VRAM, and the local model or checkpoint version. For API work, verify only that the required configuration is available; do not read or reveal secret values from `.env`. Experiment code may consume a user-provided credential from the process environment at runtime, but it must never print, serialize, snapshot, or embed the credential in source code, commands, configuration files, metadata, logs, issues, or commits. Record the external API protocol and model name, but never the API key.
+
+Persist the actual API and GPU roles, versions, resource usage, and failures in the immutable run record. Never silently switch an API provider, external model, local model, checkpoint, device, or resource type after a failure; follow a fallback only when it was agreed in advance, otherwise preserve the failure evidence and stop or create a separately identified run after the plan is revised. Paper results must identify the supporting experiment IDs and disclose which external and local models produced or evaluated the reported results.
+
+Before any resource-dependent work begins, complete this preflight in order: verify that the research question and success criteria are defined; confirm the API/GPU roles and data flow; identify the external API model and each local model or checkpoint; confirm the API-call, API-cost, and GPU-time limits; select an unused run ID and output path; then let the experiment process check GPU availability and report required API variables only as configured or missing, never by value. Create the immutable run record before executing the experiment so a failed preflight or partial run can still be preserved.
+
+Apply explicit failure behavior. Stop a GPU-dependent run and record failure when the GPU is unavailable or out of memory; never substitute an API model. When an API credential is missing, tell the user to configure it locally without asking them to paste it. Retry API failures only up to the predeclared limit, stop new requests when the call or cost budget is reached, and never silently switch providers or models. Any run that completes only part of its declared data flow remains failed and must not support a paper claim. Follow `experiments/runs/README.md` for the required resource metadata and metrics.
+
 ## Build, Test, and Development Commands
 
 Use Python 3.10+ and `uv`:
