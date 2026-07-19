@@ -44,6 +44,14 @@ Run `uv run python scripts/validate_workspace.py` after changing workflow state,
 
 Do not treat the root `main.py` file or the `research` command declared in project metadata as required workflow entry points. Ignore them during normal research generation and workspace validation; do not implement, invoke, or document them unless the user opens a separate maintenance task for those legacy placeholders.
 
+## Skill Selection Across Research Stages
+
+`docs/SKILL_USAGE.md` is the authoritative inventory and stage mapping for repository-level Skills. Repository Skills that Codex may discover belong under `.agents/skills/<skill-name>/`; do not treat a Skill stored elsewhere as active. Select Skills from the concrete task and their descriptions, not merely from the current phase. A user may invoke a Skill explicitly; otherwise use implicit selection only when the task matches. Do not load or run every Skill at a phase transition.
+
+Stage one may use input-reading, PDF, OCR, spreadsheet, or paper-knowledge Skills only for real source material and an agreed research need. Stage two may use them for approved preparation or analysis, but they never replace standalone experiment scripts, immutable run evidence, or registry updates. Stage three may reuse verified paper Skills for source navigation; DOCX, PPTX, XLSX, generated PDF, new paper Skills, and other format-specific outputs remain opt-in deliverables unless the user explicitly requests them.
+
+Before using a Skill that uploads data, incurs cost, needs credentials, installs dependencies, persists source documents, or modifies `.agents/`, satisfy the applicable data-transfer, budget, dependency, license, and authorization gates. Check secret variables only for presence and never read or report their values. Repository safety and evidence rules override conflicting Skill advice, including instructions to display complete extracted content. Record material Skill choices and approvals in `RESEARCH.md`, generate actionable setup in `TODO.md`, and record non-secret tool/version provenance when a Skill participates in an experiment. The legacy `.agents/skill-creator/` copy is not active; use the current environment's `skill-creator` for an explicitly authorized Skill-maintenance task.
+
 ## Stage Gates
 
 `docs/WORKFLOW_GATES.md` is the authoritative protocol for entering, completing, pausing, resuming, and rolling back the three research phases. Read it before beginning a phase or changing phase status. Do not perform substantive work in a later phase until its entry gate passes. At every transition, update the current phase, status, gate result, pause reason, and resume condition in `TODO.md`; record user confirmations, scope changes, privacy decisions, and other durable decisions in `RESEARCH.md`.

@@ -25,3 +25,8 @@ models/*
 
 experiments/runs/*
 !experiments/runs/README.md
+
+# Generated paper-Skill source material stays local by default. Commit only
+# after confirming copyright, redistribution, privacy, and size constraints.
+.agents/skills/paper-*/fulltext.md
+.agents/skills/paper-*/source/

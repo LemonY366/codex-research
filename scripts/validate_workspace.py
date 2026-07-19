@@ -27,6 +27,7 @@ REQUIRED_PATHS = (
     "docs/README.md",
     "docs/TEMPLATE_BOUNDARIES.md",
     "docs/WORKFLOW_GATES.md",
+    "docs/SKILL_USAGE.md",
     "datasets/README.md",
     "models/README.md",
     "baselines/README.md",
@@ -48,6 +49,16 @@ VALID_PHASES = {
 }
 VALID_PHASE_STATUSES = {"未开始", "进行中", "已暂停", "已完成"}
 VALID_GATE_RESULTS = {"待检查", "未通过", "已通过", "不适用"}
+
+EXPECTED_TEMPLATE_SKILLS = {
+    "docx",
+    "paddleocr-doc-parsing",
+    "paddleocr-text-recognition",
+    "paper-skill-creater",
+    "pdf",
+    "pptx",
+    "xlsx",
+}
 
 REGISTRY_RULES = {
     "datasets/registry.yaml": (
@@ -140,6 +151,7 @@ class WorkspaceValidator:
         """Execute all checks and return findings in deterministic order."""
 
         self.check_required_paths()
+        self.check_skill_layout()
         phase, status = self.check_stage_state()
         self.check_unresolved_todos(phase, status)
         self.check_registries()
@@ -163,6 +175,104 @@ class WorkspaceValidator:
                     relative_path,
                     "required template document is missing",
                 )
+
+    def check_skill_layout(self) -> None:
+        """Validate repository Skill discovery paths and basic metadata."""
+
+        agents_root = self.root / ".agents"
+        active_root = agents_root / "skills"
+        usage_path = self.root / "docs/SKILL_USAGE.md"
+        usage_text = (
+            usage_path.read_text(encoding="utf-8") if usage_path.is_file() else ""
+        )
+
+        if not active_root.is_dir():
+            self.add(
+                "ERROR",
+                "SKILL_ROOT_MISSING",
+                ".agents/skills",
+                "repository Skills must use the Codex discovery path",
+            )
+            return
+
+        for child in sorted(agents_root.iterdir()):
+            if (
+                child.is_dir()
+                and child.name not in {"skills", "skill-creator"}
+                and (child / "SKILL.md").is_file()
+            ):
+                self.add(
+                    "ERROR",
+                    "SKILL_LEGACY_PATH",
+                    child.relative_to(self.root).as_posix(),
+                    "active repository Skill is outside .agents/skills",
+                )
+
+        discovered: set[str] = set()
+        for skill_dir in sorted(path for path in active_root.iterdir() if path.is_dir()):
+            relative = skill_dir.relative_to(self.root).as_posix()
+            skill_file = skill_dir / "SKILL.md"
+            if not skill_file.is_file():
+                self.add(
+                    "ERROR",
+                    "SKILL_FILE_MISSING",
+                    relative,
+                    "Skill directory is missing SKILL.md",
+                )
+                continue
+            text = skill_file.read_text(encoding="utf-8")
+            frontmatter = re.match(r"^---\n(.*?)\n---\n", text, re.DOTALL)
+            if not frontmatter:
+                self.add(
+                    "ERROR",
+                    "SKILL_FRONTMATTER_INVALID",
+                    f"{relative}/SKILL.md",
+                    "SKILL.md must start with YAML frontmatter",
+                )
+                continue
+            header = frontmatter.group(1)
+            name_match = re.search(r"(?m)^name:\s*['\"]?([a-z0-9-]+)", header)
+            description_match = re.search(r"(?m)^description:\s*(?:.+|[>|]-?)$", header)
+            if not name_match or not description_match:
+                self.add(
+                    "ERROR",
+                    "SKILL_METADATA_MISSING",
+                    f"{relative}/SKILL.md",
+                    "Skill frontmatter must contain name and description",
+                )
+                continue
+            name = name_match.group(1)
+            if name != skill_dir.name:
+                self.add(
+                    "ERROR",
+                    "SKILL_NAME_MISMATCH",
+                    f"{relative}/SKILL.md",
+                    "Skill name must match its directory name",
+                )
+            if name in discovered:
+                self.add(
+                    "ERROR",
+                    "SKILL_NAME_DUPLICATE",
+                    f"{relative}/SKILL.md",
+                    "duplicate active repository Skill name",
+                )
+            discovered.add(name)
+            if name not in EXPECTED_TEMPLATE_SKILLS and not name.startswith("paper-"):
+                if f"`{name}`" not in usage_text:
+                    self.add(
+                        "WARN",
+                        "SKILL_USAGE_UNDOCUMENTED",
+                        f"{relative}/SKILL.md",
+                        "new repository Skill is not documented in docs/SKILL_USAGE.md",
+                    )
+
+        for missing_name in sorted(EXPECTED_TEMPLATE_SKILLS - discovered):
+            self.add(
+                "ERROR",
+                "TEMPLATE_SKILL_MISSING",
+                f".agents/skills/{missing_name}",
+                "expected template Skill is missing from the discovery path",
+            )
 
     def check_stage_state(self) -> tuple[str | None, str | None]:
         """Validate the user-facing phase status in TODO.md."""

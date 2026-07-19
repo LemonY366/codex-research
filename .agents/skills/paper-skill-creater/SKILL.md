@@ -16,10 +16,10 @@ description: "将论文全文转化为可复用的 paper skill。当用户提供
 
 ## 输出
 
-生成 `paper-{论文缩写}/` 目录，包含：
+经用户明确授权后，在 `.agents/skills/paper-{论文缩写}/` 生成目录，包含：
 
 ```
-paper-{论文缩写}/
+.agents/skills/paper-{论文缩写}/
 ├── SKILL.md              # 论文核心信息（摘要、创新点、实验结果）
 ├── fulltext.md            # 统一后的论文全文（PDF 时由解析生成）
 └── source/                # 原始文件、PaddleOCR JSON 与提取资源（如有）
@@ -29,6 +29,8 @@ paper-{论文缩写}/
 - 用户提供的 `.md` 文件 → 原样保存在 `source/`，并作为 `fulltext.md`
 - 用户提供的 LaTeX 项目 → 保留整个项目目录在 `source/`
 - PDF → 保留原 PDF 路径或副本、PaddleOCR JSON/资源与生成的 `fulltext.md`
+
+`fulltext.md` 与 `source/` 默认只保存在用户本地，并由 `.gitignore` 排除。只有用户确认版权、再分发权限、隐私、保密性和文件体积均允许时，才可选择提交；不得为了让 paper Skill 可用而绕过这些边界。
 
 ## 工作流程
 

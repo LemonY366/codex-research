@@ -1,6 +1,6 @@
 ---
 name: pdf
-description: Comprehensive PDF manipulation toolkit for extracting text and tables, creating new PDFs, merging/splitting documents, and handling forms. When Claude needs to fill in a PDF form or programmatically process, generate, or analyze PDF documents at scale.
+description: Comprehensive PDF manipulation toolkit for extracting text and tables, creating new PDFs, merging or splitting documents, and handling forms. Use when Codex needs to process, generate, analyze, or fill PDF documents locally; prefer the repository PaddleOCR skills for scanned or layout-heavy extraction.
 license: Proprietary. LICENSE.txt has complete terms
 ---
 

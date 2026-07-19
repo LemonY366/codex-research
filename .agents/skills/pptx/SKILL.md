@@ -1,6 +1,6 @@
 ---
 name: pptx
-description: "Presentation creation, editing, and analysis. When Claude needs to work with presentations (.pptx files) for: (1) Creating new presentations, (2) Modifying or editing content, (3) Working with layouts, (4) Adding comments or speaker notes, or any other presentation tasks"
+description: "Presentation creation, editing, and analysis. Use when Codex needs to create, modify, review, extract content from, or work with layouts, comments, or speaker notes in .pptx presentations."
 license: Proprietary. LICENSE.txt has complete terms
 ---
 
@@ -26,7 +26,7 @@ You need raw XML access for: comments, speaker notes, slide layouts, animations,
 #### Unpacking a file
 `python ooxml/scripts/unpack.py <office_file> <output_dir>`
 
-**Note**: The unpack.py script is located at `skills/pptx/ooxml/scripts/unpack.py` relative to the project root. If the script doesn't exist at this path, use `find . -name "unpack.py"` to locate it.
+**Note**: The unpack.py script is located at `.agents/skills/pptx/ooxml/scripts/unpack.py` relative to the project root. If the script doesn't exist at this path, use `find . -name "unpack.py"` to locate it.
 
 #### Key file structures
 * `ppt/presentation.xml` - Main presentation metadata and slide references
