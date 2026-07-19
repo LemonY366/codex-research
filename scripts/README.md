@@ -42,3 +42,14 @@ scripts/
 ```bash
 uv run python scripts/prepare_dataset.py --input datasets/raw --output datasets/processed
 ```
+
+## 工作区边界验证
+
+`validate_workspace.py` 是模板预置的只读检查工具，用于检查必需文档、阶段状态、关键 `TODO`、按需创建的 registry、运行证据、疑似凭据和论文实验 ID 追溯。它不启动 Codex、不读取 `.env`、不创建或修复文件，也不替代 Codex 生成研究内容。
+
+```bash
+uv run python scripts/validate_workspace.py
+uv run python scripts/validate_workspace.py --strict
+```
+
+常规模式在发现错误时返回非零状态；`--strict` 也将警告视为失败。凭据检查是启发式检查，不能代替专用密钥扫描器。运行证据的覆盖检查可识别 Git 已跟踪文件的改写；默认忽略、未建立外部校验基线的本地运行无法仅凭当前文件状态证明从未被修改。

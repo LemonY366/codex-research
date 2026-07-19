@@ -11,10 +11,8 @@
 - 必须修改时，保留可审阅的 patch 或在方法目录中记录改动原因、文件和对应实验 ID。
 - 运行产物仍保存至 `experiments/runs/<run-id>/`，并记录所用基线版本。
 
-## 登记模板
+## 动态登记
 
-| 目录 | 方法/论文 | 上游仓库 | 固定版本 | 许可证 | 实验 ID |
-| --- | --- | --- | --- | --- |
-| `text2sql-baseline/` | TODO | TODO | TODO | TODO | TODO |
+首次确认具体 baseline 时，由 Codex 创建 `baselines/registry.yaml`；没有实际 baseline 时不创建空登记表或虚假示例。每个条目至少记录 `id`、`name`、`upstream`、`revision`、`license` 和 `path`，并在有运行后关联实验 ID。需要鉴权的上游地址只记录非敏感公开部分，不得嵌入凭据。
 
 不要在此目录提交数据集、模型检查点、密钥或未授权再分发的内容。

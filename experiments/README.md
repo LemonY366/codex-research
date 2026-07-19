@@ -18,7 +18,7 @@ experiments/
 
 - `scripts/` 保存实验实现。每次运行必须使用或明确引用一个可直接执行的脚本；详见 `scripts/README.md`。
 - `runs/` 保存实际运行产物，例如命令、配置快照、日志、指标、检查点位置和失败原因；详见 `runs/README.md`。
-- `registry.yaml` 可用于维护实验 ID、状态、脚本路径与运行记录的索引；不要将原始日志或大型模型文件放入其中。
+- `registry.yaml` 在首次确认具体实验时由 Codex 创建；没有实际实验时不创建空登记表或虚假示例。每个条目至少记录 `experiment_id`、`status`、`script` 和 `runs`；不要将原始日志、密钥或大型模型文件放入其中。
 
 不属于本目录的内容包括：全局研究目标应写在根目录 `RESEARCH.md`，当前行动项应写在 `TODO.md`，通用可复用代码应放在 `src/`，通用辅助脚本应放在 `scripts/`，论文产物应放在 `paper/`。
 

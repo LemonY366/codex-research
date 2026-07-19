@@ -11,6 +11,7 @@
 - 根目录 `TODO.md`：当前待办事项。
 - 根目录 `AGENTS.md`：Codex 必须遵守的长期规则。
 - `WORKFLOW_GATES.md`：三阶段的进入、完成、停止、恢复、回退与隐私门禁。
+- `TEMPLATE_BOUNDARIES.md`：模板预置、Codex 动态生成、用户本地内容、运行证据与可选交付物的权威边界。
 
 ## 文档维护规则
 
