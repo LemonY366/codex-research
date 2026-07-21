@@ -26,6 +26,12 @@ models/*
 experiments/runs/*
 !experiments/runs/README.md
 
+# Restricted or full-text phase-one source material stays local and must not be
+# created or read by Codex without an explicit data, copyright, and privacy gate.
+research/private/
+research/raw/
+research/source_files/
+
 # Generated paper-Skill source material stays local by default. Commit only
 # after confirming copyright, redistribution, privacy, and size constraints.
 .agents/skills/paper-*/fulltext.md

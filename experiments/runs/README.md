@@ -28,6 +28,9 @@ experiments/runs/
 ```json
 {
   "experiment_id": "exp-001",
+  "research_question_ids": ["RQ-001"],
+  "success_criterion_ids": ["SC-001"],
+  "decision_ids": ["DEC-001"],
   "status": "success",
   "resources": {
     "gpu": {
@@ -78,6 +81,6 @@ experiments/runs/
 
 - 实验实现脚本位于 `experiments/scripts/`。
 - 通用源码和工具分别位于 `src/` 与 `scripts/`。
-- 被确认用于分析或论文的结果可由脚本从本目录读取，或在 `paper/` 中引用；无论采用何种方式，都必须保留对本运行目录及实验 ID 的追溯。
+- 被确认用于分析或论文的结果可由脚本从本目录读取，或在 `paper/` 中引用；无论采用何种方式，都必须保留对本运行目录、实验 ID、研究问题、成功标准与研究决策的追溯。阶段三的数值和实证主张继续引用实验 ID，不以研究主张 ID 替代运行证据。
 
 只有具备足够运行证据的目录，才能支撑 `registry.yaml` 中的成功状态和论文中的实证性结论。
