@@ -32,7 +32,7 @@
 - 根据真实输入格式选择读取类 Skill；没有对应文件或任务时不调用。
 - 开始 OCR 或其他外部解析前，在 `RESEARCH.md` 记录数据分类、允许外发范围、预算和授权。
 - 只有用户明确希望长期复用某篇论文时，才创建 paper Skill；普通论文阅读不自动产生 `.agents/skills/paper-*`。
-- 在阶段一结束前，将阶段二确实需要的 Skill、依赖与授权登记到 `RESEARCH.md` 和 `TODO.md`；不预生成不适用任务。
+- 在阶段一结束前，将阶段二确实需要的 Skill、依赖与授权登记到 `RESEARCH.md` 和 `experiments/TODO.md`；不预生成不适用任务。
 
 ### 阶段二：实验与分析
 

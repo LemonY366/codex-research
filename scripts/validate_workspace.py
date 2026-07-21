@@ -22,7 +22,8 @@ REQUIRED_PATHS = (
     "README.md",
     "AGENTS.md",
     "RESEARCH.md",
-    "TODO.md",
+    "experiments/TODO.md",
+    "paper/TODO.md",
     ".env.example",
     "docs/README.md",
     "docs/TEMPLATE_BOUNDARIES.md",
@@ -49,6 +50,11 @@ VALID_PHASES = {
 }
 VALID_PHASE_STATUSES = {"未开始", "进行中", "已暂停", "已完成"}
 VALID_GATE_RESULTS = {"待检查", "未通过", "已通过", "不适用"}
+STAGE_TODO_PATHS = {
+    "阶段二：实验与分析": "experiments/TODO.md",
+    "阶段三：论文写作": "paper/TODO.md",
+}
+STAGE_TODO_LINE_WARNING = 500
 
 EXPECTED_TEMPLATE_SKILLS = {
     "docx",
@@ -175,6 +181,13 @@ class WorkspaceValidator:
                     relative_path,
                     "required template document is missing",
                 )
+        if (self.root / "TODO.md").exists():
+            self.add(
+                "ERROR",
+                "LEGACY_ROOT_TODO",
+                "TODO.md",
+                "root TODO.md is obsolete; move phase-two and phase-three tasks to their stage directories",
+            )
 
     def check_skill_layout(self) -> None:
         """Validate repository Skill discovery paths and basic metadata."""
@@ -275,12 +288,12 @@ class WorkspaceValidator:
             )
 
     def check_stage_state(self) -> tuple[str | None, str | None]:
-        """Validate the user-facing phase status in TODO.md."""
+        """Validate the global workflow state in RESEARCH.md."""
 
-        todo_path = self.root / "TODO.md"
-        if not todo_path.is_file():
+        research_path = self.root / "RESEARCH.md"
+        if not research_path.is_file():
             return None, None
-        text = todo_path.read_text(encoding="utf-8")
+        text = research_path.read_text(encoding="utf-8")
         phase = self.extract_field(text, "当前阶段")
         status = self.extract_field(text, "阶段状态")
         gate = self.extract_field(text, "阶段门禁")
@@ -289,28 +302,28 @@ class WorkspaceValidator:
             self.add(
                 "ERROR",
                 "INVALID_PHASE",
-                "TODO.md",
+                "RESEARCH.md",
                 f"current phase must be one of {sorted(VALID_PHASES)}",
             )
         if status not in VALID_PHASE_STATUSES:
             self.add(
                 "ERROR",
                 "INVALID_PHASE_STATUS",
-                "TODO.md",
+                "RESEARCH.md",
                 f"phase status must be one of {sorted(VALID_PHASE_STATUSES)}",
             )
         if gate not in VALID_GATE_RESULTS:
             self.add(
                 "ERROR",
                 "INVALID_GATE_RESULT",
-                "TODO.md",
+                "RESEARCH.md",
                 f"gate result must be one of {sorted(VALID_GATE_RESULTS)}",
             )
         if status in {"进行中", "已完成"} and gate != "已通过":
             self.add(
                 "ERROR",
                 "ACTIVE_PHASE_WITHOUT_GATE",
-                "TODO.md",
+                "RESEARCH.md",
                 "an in-progress or completed phase must have a passed gate",
             )
         if status == "已暂停":
@@ -320,14 +333,14 @@ class WorkspaceValidator:
                 self.add(
                     "ERROR",
                     "PAUSE_REASON_MISSING",
-                    "TODO.md",
+                    "RESEARCH.md",
                     "a paused phase must record a stop reason",
                 )
             if resume_condition in {None, "不适用", "TODO"}:
                 self.add(
                     "ERROR",
                     "RESUME_CONDITION_MISSING",
-                    "TODO.md",
+                    "RESEARCH.md",
                     "a paused phase must record a resume condition",
                 )
         return phase, status
@@ -345,11 +358,9 @@ class WorkspaceValidator:
         """Report unresolved placeholders when workflow progress makes them critical."""
 
         research_path = self.root / "RESEARCH.md"
-        todo_path = self.root / "TODO.md"
-        if not research_path.is_file() or not todo_path.is_file():
+        if not research_path.is_file():
             return
         research_count = len(re.findall(r"\bTODO\b", research_path.read_text("utf-8")))
-        task_count = len(re.findall(r"\bTODO\b", todo_path.read_text("utf-8")))
 
         later_phase = phase in {"阶段二：实验与分析", "阶段三：论文写作"}
         if research_count and (later_phase or status == "已完成"):
@@ -366,13 +377,34 @@ class WorkspaceValidator:
                 "RESEARCH.md",
                 f"{research_count} TODO marker(s) remain and must be resolved or justified before transition",
             )
-        if task_count:
-            self.add(
-                "WARN" if status in {"进行中", "已完成"} else "INFO",
-                "TASK_TODO",
-                "TODO.md",
-                f"{task_count} TODO marker(s) remain in the active progress view",
-            )
+        for task_phase, relative_path in STAGE_TODO_PATHS.items():
+            task_path = self.root / relative_path
+            if not task_path.is_file():
+                continue
+            task_text = task_path.read_text(encoding="utf-8")
+            task_count = len(re.findall(r"\bTODO\b", task_text))
+            if task_count:
+                is_current = phase == task_phase
+                if is_current and status == "已完成":
+                    severity = "ERROR"
+                elif is_current and status == "进行中":
+                    severity = "WARN"
+                else:
+                    severity = "INFO"
+                self.add(
+                    severity,
+                    "TASK_TODO",
+                    relative_path,
+                    f"{task_count} TODO marker(s) remain in the stage task file",
+                )
+            line_count = len(task_text.splitlines())
+            if line_count > STAGE_TODO_LINE_WARNING:
+                self.add(
+                    "WARN",
+                    "STAGE_TODO_TOO_LARGE",
+                    relative_path,
+                    f"stage task file has {line_count} lines; compact completed work into summaries and evidence links",
+                )
 
     def check_registries(self) -> None:
         """Require a registry only after its first concrete object appears."""

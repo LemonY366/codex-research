@@ -12,7 +12,7 @@ cd codex-research
 codex
 ```
 
-后续研究、实验和写作均通过与 Codex 的提示词交互完成。首次进入项目时，可让 Codex 阅读 `README.md`、`RESEARCH.md` 和 `TODO.md`，并根据当前状态与用户头脑风暴或继续已有工作；无需手动执行常规安装、实验或写作命令。已有克隆时，直接在其项目目录运行 `codex` 即可。
+后续研究、实验和写作均通过与 Codex 的提示词交互完成。首次进入项目时，可让 Codex 阅读 `README.md` 和 `RESEARCH.md`；进入实验或写作阶段时，再分别读取 `experiments/TODO.md` 或 `paper/TODO.md`。无需手动执行常规安装、实验或写作命令。已有克隆时，直接在其项目目录运行 `codex` 即可。
 
 当前模板不把根目录 `main.py` 或 `research` 命令作为工作流入口，也不要求用户运行或完善它们；具体研究代码和实验入口由 Codex 在研究方案确认后按需生成。
 
@@ -36,7 +36,7 @@ codex
 
 数值、表格和实证性结论必须可追溯到相应实验 ID 与运行目录；不可核实的信息标记为 `TODO`。
 
-若 `RESEARCH.md` 与 `TODO.md` 尚未提供足够完整的研究目标、约束和下一步行动，Codex 会先与用户进行头脑风暴，确认问题、成功标准、数据、基线、预算与第一阶段产物后再开始实施。
+若 `RESEARCH.md` 尚未提供足够完整的研究目标、约束和阶段一行动，Codex 会先与用户进行头脑风暴，确认问题、成功标准、数据、基线、预算与第一阶段产物后再开始实施。阶段二和阶段三的行动分别维护在 `experiments/TODO.md` 与 `paper/TODO.md`。
 
 ## 阶段门禁
 
@@ -50,12 +50,12 @@ codex
 
 ### 阶段一：调研与设计
 
-初始的 1–3 轮头脑风暴使用 **GPT-5.6 Sol / Ultra**，处理开放式问题定义、研究空白与方案取舍；在方向明确后切换到 **GPT-5.6 Sol / Medium**，以较低成本完善 `RESEARCH.md` 和 `TODO.md`。
+初始的 1–3 轮头脑风暴使用 **GPT-5.6 Sol / Ultra**，处理开放式问题定义、研究空白与方案取舍；在方向明确后切换到 **GPT-5.6 Sol / Medium**，以较低成本完善包含阶段一任务的 `RESEARCH.md`。
 
 可先使用普通对话或 `/plan`，例如：
 
 ```text
-/plan 阅读 RESEARCH.md 和 TODO.md；与我头脑风暴研究xx问题、成功标准、数据集、基线、预算和阶段一交付物。确认后更新这两个文件。
+/plan 阅读 RESEARCH.md；与我头脑风暴研究xx问题、成功标准、数据集、基线、预算和阶段一交付物。确认后更新该文件，并生成 experiments/TODO.md 中可执行的阶段二任务。
 ```
 
 ### 阶段二：实验与分析
@@ -63,7 +63,7 @@ codex
 选择 **GPT-5.6 Terra / Low**，然后使用 `/goal` 执行已定义、可验证的实验任务：
 
 ```text
-/goal 执行 TODO.md 中的第二阶段“实验与分析”。记录期间的命令、文档、指标和失败原因等信息。
+/goal 执行 experiments/TODO.md 中的实验与分析任务。详细命令、指标和失败原因保存到新的 experiments/runs/ 运行记录。
 ```
 
 ### 阶段三：论文写作（可选专利）
@@ -71,7 +71,7 @@ codex
 继续使用 **GPT-5.6 Terra / Low**，以 `/goal` 将已验证实验结果写入唯一工作草稿 `paper/draft_zh.md`：
 
 ```text
-/goal 根据已验证的 experiments/runs/ 结果完成 TODO.md 中“阶段三：论文写作”的事项。所有数值和实验结论必须标注实验 ID；默认只修改 paper/draft_zh.md，无法核实的信息标记 TODO。
+/goal 根据已验证的 experiments/runs/ 结果完成 paper/TODO.md 中的论文写作事项。所有数值和实验结论必须标注实验 ID；默认只修改 paper/draft_zh.md，无法核实的信息标记 TODO。
 ```
 
 专利工作仅在用户明确要求时加入阶段三。`/goal` 的目标应包含成果、约束与可验证的完成条件；可使用 `/goal edit`、`/goal pause`、`/goal resume` 和 `/goal clear` 管理运行中的目标。更多说明见 [Codex 模型选择](https://developers.openai.com/codex/codex-manual.md#model-selection) 与 [Goal 模式](https://developers.openai.com/codex/codex-manual.md#set-or-view-a-task-goal-with-goal)。
@@ -82,14 +82,15 @@ codex
 README.md            # 项目入口与使用说明
 AGENTS.md            # Codex 的长期工作规则
 RESEARCH.md          # 全局唯一的研究任务合同
-TODO.md              # 当前待办事项
 datasets/            # 数据集与来源说明
 models/              # 模型检查点与版本说明
 baselines/           # 外部对比方法源码与版本登记
 src/                 # 论文方法、训练和评测源码
 scripts/             # 数据预处理等跨实验通用脚本
 experiments/         # 实验脚本、运行记录与索引
+  TODO.md            # 阶段二实验与分析任务
 paper/               # 草稿、正式论文、引用与图像
+  TODO.md            # 阶段三论文写作任务
 patents/             # 专利技术交底、权利要求草案与附图
 docs/                # 稳定、跨阶段的项目规范
 .agents/skills/      # Codex 可按任务发现和调用的仓库级 Skills
@@ -101,9 +102,21 @@ docs/                # 稳定、跨阶段的项目规范
 
 数据、模型、baseline 和实验的 `registry.yaml` 只在首次确认真实对象时由 Codex 创建，不预置空表或虚假条目。模板提供只读的 `scripts/validate_workspace.py`，用于检查必需文档、阶段状态、动态登记、运行证据、疑似凭据和论文实验 ID 追溯；它不会启动 Codex、读取 `.env`、创建登记表或修改研究内容。
 
+### 分阶段任务文件的程序行为
+
+Codex 和工作区校验器以 `RESEARCH.md` 中的“当前工作流状态”为全局状态来源。程序进入不同阶段时按以下规则选择任务文件：
+
+| 当前阶段 | 全局状态与门禁 | 可执行任务 | 详细产物 |
+| --- | --- | --- | --- |
+| 阶段一：调研与设计 | `RESEARCH.md` | `RESEARCH.md` 的阶段一进度 | 已确认的研究合同与决策仍写入 `RESEARCH.md` |
+| 阶段二：实验与分析 | `RESEARCH.md` | `experiments/TODO.md` | 脚本进入 `experiments/scripts/`，每次运行证据进入新的 `experiments/runs/<run-id>/` |
+| 阶段三：论文写作 | `RESEARCH.md` | `paper/TODO.md` | 正文进入 `paper/draft_zh.md`，图表和来源进入 `paper/images/` |
+
+`scripts/validate_workspace.py` 会强制执行这套结构：根目录重新出现旧 `TODO.md` 时报告错误；全局阶段、状态、门禁、停止原因和恢复条件均从 `RESEARCH.md` 检查；当前阶段声明完成但对应任务文件仍有未解决的 `TODO` 时报告错误；阶段任务文件超过 500 行时发出警告，提示将已完成过程压缩为摘要和证据链接。模板尚处于未开始阶段时，未填写的占位符只作为信息提示，不阻止校验通过。
+
 ## 观察进展
 
-用户可随时查看 [TODO.md](TODO.md) 了解三个阶段的当前进展：调研与设计、实验与分析、论文写作（可选专利成果整理）。默认阶段三只进行论文写作；只有用户明确要求时才新增专利工作。执行任务时应及时更新各阶段的进行中、下一步和已完成事项；研究目标、约束和长期决策仍维护在 `RESEARCH.md`。
+用户可查看 [RESEARCH.md](RESEARCH.md) 了解全局阶段状态和阶段一进展，查看 [experiments/TODO.md](experiments/TODO.md) 了解实验与分析任务，查看 [paper/TODO.md](paper/TODO.md) 了解论文写作任务。阶段 TODO 只保存当前行动、下一步、阻塞项和精简的完成摘要；实验细节进入运行记录，论文正文进入工作草稿。默认阶段三只进行论文写作；只有用户明确要求时才新增专利工作。
 
 ## 文档维护
 
