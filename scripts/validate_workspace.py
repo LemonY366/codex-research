@@ -49,6 +49,8 @@ REQUIRED_PATHS = (
     "paper/draft_zh.md",
     "paper/images/README.md",
     "patents/README.md",
+    "tests/README.md",
+    "tests/test_validate_workspace.py",
 )
 
 VALID_PHASES = {
@@ -200,6 +202,32 @@ FORBIDDEN_EVIDENCE_FIELD_NAMES = {
     "secret",
     "token",
 }
+FORBIDDEN_EVIDENCE_CONTENT_FIELDS = {
+    "document_content",
+    "full_text",
+    "ocr_fulltext",
+    "personal_data",
+    "prompt_content",
+    "raw_content",
+    "raw_sample",
+    "response_content",
+    "sensitive_sample",
+    "transcript",
+}
+EVIDENCE_TEXT_LIMITS = {
+    "claim": 1_500,
+    "decision": 2_000,
+    "notes": 2_000,
+    "query": 1_000,
+    "title": 500,
+    "user_input_source": 500,
+}
+MAX_EVIDENCE_STRING_LENGTH = 4_000
+PERSONAL_DATA_PATTERNS = (
+    re.compile(r"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b", re.IGNORECASE),
+    re.compile(r"(?<!\d)1[3-9]\d{9}(?!\d)"),
+    re.compile(r"(?<!\d)\d{17}[\dXx](?!\d)"),
+)
 
 EXPECTED_TEMPLATE_SKILLS = {
     "docx",
@@ -528,7 +556,7 @@ class WorkspaceValidator:
         research_path = self.root / "RESEARCH.md"
         if not research_path.is_file():
             return
-        research_count = len(re.findall(r"\bTODO\b", research_path.read_text("utf-8")))
+        research_count = self.count_todo_markers(research_path.read_text("utf-8"))
 
         later_phase = phase in {"阶段二：实验与分析", "阶段三：论文写作"}
         if research_count and (later_phase or status == "已完成"):
@@ -550,7 +578,7 @@ class WorkspaceValidator:
             if not task_path.is_file():
                 continue
             task_text = task_path.read_text(encoding="utf-8")
-            task_count = len(re.findall(r"\bTODO\b", task_text))
+            task_count = self.count_todo_markers(task_text)
             if task_count:
                 is_current = phase == task_phase
                 if is_current and status == "已完成":
@@ -573,6 +601,12 @@ class WorkspaceValidator:
                     relative_path,
                     f"stage task file has {line_count} lines; compact completed work into summaries and evidence links",
                 )
+
+    @staticmethod
+    def count_todo_markers(text: str) -> int:
+        """Count standalone placeholders without treating paths such as TODO.md as gaps."""
+
+        return len(re.findall(r"(?<![/\.\w])TODO(?![/\.\w])", text))
 
     def check_research_contract(
         self, phase: str | None, status: str | None
@@ -905,6 +939,33 @@ class WorkspaceValidator:
                 f"research contract is large ({line_count} lines, {byte_count} bytes); move detailed process into research/",
             )
 
+        external_api = self.extract_field(text, "外部模型 API") or ""
+        transfer = self.extract_field(text, "外部 API 传输") or ""
+        external_api_is_explicit = (
+            external_api not in PLACEHOLDER_CELLS
+            and not external_api.startswith(("TODO", "不适用"))
+        )
+        transfer_is_allowed = "允许" in transfer and "不允许" not in transfer
+        if external_api_is_explicit and transfer_is_allowed:
+            confirmed_external_authorization = any(
+                row.get("状态") == "已确认"
+                and re.fullmatch(r"AUTH-\d{3}", row.get("授权 ID", ""))
+                and any(
+                    term in f"{row.get('授权事项', '')} {row.get('范围', '')}"
+                    for term in ("外发", "外部 API", "传输")
+                )
+                for headers, rows in tables
+                if {"授权 ID", "授权事项", "范围", "状态"}.issubset(headers)
+                for row in rows
+            )
+            if not confirmed_external_authorization:
+                self.add(
+                    "ERROR",
+                    "RESEARCH_API_TRANSFER_AUTHORIZATION_MISSING",
+                    "RESEARCH.md",
+                    "allowed external API transfer requires a scoped confirmed AUTH-<nnn>",
+                )
+
         if not transition_ready:
             return
 
@@ -965,7 +1026,6 @@ class WorkspaceValidator:
                     f"{label} is not applicable but has no explicit reason",
                 )
 
-        external_api = self.extract_field(text, "外部模型 API") or ""
         if external_api.startswith("不适用"):
             if not self.has_not_applicable_reason(external_api):
                 self.add(
@@ -984,7 +1044,6 @@ class WorkspaceValidator:
                         "RESEARCH.md",
                         f"{label} must be explicit when an external API is planned",
                     )
-            transfer = self.extract_field(text, "外部 API 传输") or ""
             if not any(word in transfer for word in ("允许", "不允许")):
                 self.add(
                     "ERROR",
@@ -992,26 +1051,6 @@ class WorkspaceValidator:
                     "RESEARCH.md",
                     "external API transfer must explicitly state allowed or not allowed",
                 )
-            transfer_is_allowed = "允许" in transfer and "不允许" not in transfer
-            if transfer_is_allowed:
-                confirmed_external_authorization = any(
-                    row.get("状态") == "已确认"
-                    and re.fullmatch(r"AUTH-\d{3}", row.get("授权 ID", ""))
-                    and any(
-                        term in f"{row.get('授权事项', '')} {row.get('范围', '')}"
-                        for term in ("外发", "外部 API", "传输")
-                    )
-                    for headers, rows in tables
-                    if {"授权 ID", "授权事项", "范围", "状态"}.issubset(headers)
-                    for row in rows
-                )
-                if not confirmed_external_authorization:
-                    self.add(
-                        "ERROR",
-                        "RESEARCH_API_TRANSFER_AUTHORIZATION_MISSING",
-                        "RESEARCH.md",
-                        "allowed external API transfer requires a scoped confirmed AUTH-<nnn>",
-                    )
 
         gpu_purpose = self.extract_field(text, "GPU 用途") or ""
         if gpu_purpose.startswith("不适用"):
@@ -1499,6 +1538,7 @@ class WorkspaceValidator:
         for entry in entries:
             self.require_evidence_fields(relative, "sources", entry)
             self.reject_credential_fields(relative, entry)
+            self.validate_evidence_minimal_disclosure(relative, entry)
             source_id = entry.get("source_id")
             if not isinstance(source_id, str) or not re.fullmatch(
                 r"SRC-\d{3}", source_id
@@ -1596,6 +1636,7 @@ class WorkspaceValidator:
         for entry in entries:
             self.require_evidence_fields(relative, "claims", entry)
             self.reject_credential_fields(relative, entry)
+            self.validate_evidence_minimal_disclosure(relative, entry)
             claim_id = entry.get("claim_id")
             if not isinstance(claim_id, str) or not re.fullmatch(
                 r"CLM-\d{3}", claim_id
@@ -1731,6 +1772,7 @@ class WorkspaceValidator:
         for entry in entries:
             self.require_evidence_fields(relative, "decisions", entry)
             self.reject_credential_fields(relative, entry)
+            self.validate_evidence_minimal_disclosure(relative, entry)
             decision_id = entry.get("decision_id")
             if not isinstance(decision_id, str) or not re.fullmatch(
                 r"DEC-\d{3}", decision_id
@@ -1886,6 +1928,7 @@ class WorkspaceValidator:
                 continue
             parsed_entries.append(entry)
             self.reject_credential_fields(relative, entry)
+            self.validate_evidence_minimal_disclosure(relative, entry)
             missing = sorted(SEARCH_LOG_REQUIRED_FIELDS - entry.keys())
             if missing:
                 self.add(
@@ -2127,6 +2170,70 @@ class WorkspaceValidator:
                 relative,
                 f"credential fields are forbidden in phase-one evidence: {', '.join(sorted(forbidden))}",
             )
+
+    def validate_evidence_minimal_disclosure(
+        self, relative: str, entry: dict[str, object]
+    ) -> None:
+        """Reject full-text fields, excessive payloads, and common personal data."""
+
+        content_fields = {
+            key.lower()
+            for key in self.nested_keys(entry)
+            if key.lower() in FORBIDDEN_EVIDENCE_CONTENT_FIELDS
+            or key.lower().endswith(("_full_text", "_raw_content", "_raw_sample"))
+        }
+        if content_fields:
+            self.add(
+                "ERROR",
+                "RESEARCH_EVIDENCE_FULLTEXT_FIELD_FORBIDDEN",
+                relative,
+                f"full-text or sensitive-content fields are forbidden: {', '.join(sorted(content_fields))}",
+            )
+
+        oversized_fields: set[str] = set()
+        personal_data_fields: set[str] = set()
+        for field, value in self.nested_string_items(entry):
+            limit = EVIDENCE_TEXT_LIMITS.get(field.lower(), MAX_EVIDENCE_STRING_LENGTH)
+            if len(value) > limit:
+                oversized_fields.add(field)
+            if any(pattern.search(value) for pattern in PERSONAL_DATA_PATTERNS):
+                personal_data_fields.add(field)
+        if oversized_fields:
+            self.add(
+                "ERROR",
+                "RESEARCH_EVIDENCE_MINIMAL_DISCLOSURE_EXCEEDED",
+                relative,
+                f"evidence text exceeds minimal-disclosure limits in: {', '.join(sorted(oversized_fields))}",
+            )
+        if personal_data_fields:
+            self.add(
+                "ERROR",
+                "RESEARCH_EVIDENCE_PERSONAL_DATA_FORBIDDEN",
+                relative,
+                f"possible personal data appears in evidence fields: {', '.join(sorted(personal_data_fields))}",
+            )
+
+    @classmethod
+    def nested_string_items(cls, value: object) -> list[tuple[str, str]]:
+        """Collect leaf string values with their nearest mapping field name."""
+
+        items: list[tuple[str, str]] = []
+        if isinstance(value, dict):
+            for key, child in value.items():
+                if isinstance(child, str):
+                    items.append((str(key), child))
+                elif isinstance(child, list):
+                    for list_child in child:
+                        if isinstance(list_child, str):
+                            items.append((str(key), list_child))
+                        else:
+                            items.extend(cls.nested_string_items(list_child))
+                else:
+                    items.extend(cls.nested_string_items(child))
+        elif isinstance(value, list):
+            for child in value:
+                items.extend(cls.nested_string_items(child))
+        return items
 
     def validate_contract_evidence_references(
         self,

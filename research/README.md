@@ -18,7 +18,9 @@ research/
 
 模板可以保留空集合；有第一条真实对象时才新增真实条目，不得添加虚构示例。所有 ID 在本项目内唯一，删除或合并对象时不得复用旧 ID。
 
-所有结构化证据都禁止出现 `api_key`、`token`、`password`、`secret`、`cookie`、`credential`、`authorization` 等凭据字段及其常见后缀变体；即使值是占位符也不允许。授权事实只通过 `RESEARCH.md` 的 `AUTH-<nnn>` 摘要与非敏感决策关系表达，不把认证头或访问令牌写入证据层。
+所有结构化证据都禁止出现 `api_key`、`token`、`password`、`secret`、`cookie`、`credential`、`authorization` 等凭据字段及其常见后缀变体；即使值是占位符也不允许。`full_text`、`raw_content`、`raw_sample`、`personal_data`、`prompt_content`、`response_content` 等全文或敏感载荷字段同样禁止。授权事实只通过 `RESEARCH.md` 的 `AUTH-<nnn>` 摘要与非敏感决策关系表达，不把认证头或访问令牌写入证据层。
+
+验证器对查询、标题、主张、决策、用户输入来源和备注设置保守的文本长度上限，并检查常见邮箱、手机号和身份证号模式，以约束最小披露。这些启发式规则既不能证明内容真实，也不能发现全部个人信息；Codex 在写入前仍需人工语义检查，不得通过拆分字段规避限制。
 
 ## `search_log.jsonl`
 
