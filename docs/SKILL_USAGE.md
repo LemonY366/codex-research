@@ -32,7 +32,7 @@
 - 根据真实输入格式选择读取类 Skill；没有对应文件或任务时不调用。
 - 开始 OCR 或其他外部解析前，在 `RESEARCH.md` 记录数据分类、允许外发范围、预算和授权。
 - 只有用户明确希望长期复用某篇论文时，才创建 paper Skill；普通论文阅读不自动产生 `.agents/skills/paper-*`。
-- Skill 参与阶段一调研时，将实际查询、正式来源、可核验主张和持久决策分别登记到 `research/search_log.jsonl`、`research/sources.yaml`、`research/claims.yaml` 与 `research/decisions.yaml`；在 `RESEARCH.md` 只保留稳定 ID 摘要，并把本轮新增 ID 写入会话恢复摘要。Skill 结果必须回查原始来源，不能把模型输出或工具置信度当作真实性证明，也不得将 OCR 全文、工具原始响应或受限材料当作可提交证据。
+- Skill 参与阶段一调研时，仍须遵循 `docs/SEARCH_PROTOCOL.md`。将实际查询、方向覆盖、正式来源、可核验主张、持久决策和累计资源分别登记到 `research/search_log.jsonl`、`research/search_coverage.yaml`、`research/sources.yaml`、`research/claims.yaml`、`research/decisions.yaml` 与 `research/resources.yaml`；工具调用、返回字符或 token、页面、时间和估算费用计入同一预算。Skill 结果必须回查原始来源，不能把模型输出或工具置信度当作真实性证明，也不得将 OCR 全文、工具原始响应或受限材料直接放入活动上下文或可提交证据。在 `RESEARCH.md` 只保留稳定 ID 摘要，并把本轮新增 ID 写入会话恢复摘要。
 - 在阶段一结束前，将阶段二确实需要的 Skill、依赖与授权登记到 `RESEARCH.md` 和 `experiments/TODO.md`；不预生成不适用任务。
 
 ### 阶段二：实验与分析
@@ -53,5 +53,5 @@
 
 - OCR 或文档 Skill 的“完整输出”建议不得覆盖最小披露原则。未请求或不允许展示全文时，只保存和展示授权范围内的必要内容。
 - 缺少真实文件、依赖、外部传输授权、预算、用户要求的输出格式或合法保存权限时，不猜测、不伪造、不自动扩大范围。
-- Skill 的命令、缓存、解析 JSON 和中间文件应进入对应数据目录或新的运行目录，不写入对话、`.env` 或历史运行记录。
+- Skill 的命令、缓存、解析 JSON 和中间文件应进入对应的已授权本地数据目录或新的运行目录，不写入 `RESEARCH.md`、可提交阶段一证据、`.env` 或历史运行记录；活动上下文只保留去重后的结构化主张和必要证据定位。
 - 新增、删除或改变 Skill 的触发范围属于模板维护任务，必须同步检查本文件、`README.md`、`AGENTS.md`、`docs/TEMPLATE_BOUNDARIES.md` 和验证器。

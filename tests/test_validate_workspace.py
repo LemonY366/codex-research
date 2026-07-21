@@ -11,7 +11,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from scripts.validate_workspace import WorkspaceValidator
+from scripts.validate_workspace import REQUIRED_SEARCH_CATEGORIES, WorkspaceValidator
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
@@ -98,20 +98,11 @@ class WorkspaceValidatorTests(unittest.TestCase):
     def test_credential_field_in_evidence_is_rejected(self) -> None:
         research = self.root / "research"
         research.mkdir()
-        entry = {
-            "query_id": "QRY-001",
-            "research_question_ids": [],
-            "query": "synthetic public query",
-            "language": "en",
-            "platform": "local fixture",
-            "searched_at": "2026-07-21T10:00:00+08:00",
-            "filters": {},
-            "result_count": 0,
-            "included_source_ids": [],
-            "exclusions": [],
-            "counterevidence_search": False,
-            "api_key": "placeholder",
-        }
+        entry = self.valid_search_entry(
+            research_question_ids=[],
+            included_source_ids=[],
+            api_key="placeholder",
+        )
         (research / "search_log.jsonl").write_text(
             json.dumps(entry) + "\n", encoding="utf-8"
         )
@@ -236,6 +227,188 @@ class WorkspaceValidatorTests(unittest.TestCase):
         )
 
         self.assertIn("RESEARCH_DIRECTION_FINAL_NOT_UNIQUE", self.codes(validator))
+
+    def test_search_stop_requires_coverage_and_observable_proxies(self) -> None:
+        validator = WorkspaceValidator(self.root)
+        coverage = self.valid_search_coverage(
+            coverage={
+                **{category: "已覆盖" for category in REQUIRED_SEARCH_CATEGORIES},
+                "失败和负面结果": "未覆盖",
+            },
+            coverage_notes={"失败和负面结果": "尚未执行反证检索"},
+            new_method_categories_history=[1, 1],
+            counterevidence_completed=False,
+            stop_reason="已经完全检索全部文献",
+        )
+
+        validator.validate_search_coverage(
+            [coverage],
+            {"DIR-001"},
+            {"RQ-001"},
+            {"QRY-001"},
+            {"SRC-001"},
+            True,
+            True,
+        )
+
+        codes = self.codes(validator)
+        self.assertIn("RESEARCH_SEARCH_STOP_METHODS_UNSATURATED", codes)
+        self.assertIn("RESEARCH_SEARCH_STOP_COVERAGE_INCOMPLETE", codes)
+        self.assertIn("RESEARCH_SEARCH_STOP_PROXY_INCOMPLETE", codes)
+        self.assertIn("RESEARCH_SEARCH_STOP_REASON_INVALID", codes)
+
+    def test_secondary_source_must_trace_to_primary(self) -> None:
+        validator = WorkspaceValidator(self.root)
+        secondary = self.valid_source(
+            source_id="SRC-002",
+            provenance_level="二手来源",
+            primary_source_id="SRC-999",
+            quality_level=4,
+            usage_role="检索线索",
+        )
+
+        validator.validate_source_evidence([secondary])
+
+        self.assertIn(
+            "RESEARCH_SECONDARY_SOURCE_PRIMARY_UNRESOLVED", self.codes(validator)
+        )
+
+    def test_reposts_cannot_be_counted_as_independent_evidence(self) -> None:
+        validator = WorkspaceValidator(self.root)
+        sources = [
+            self.valid_source(source_id="SRC-001", independence_group="same-work"),
+            self.valid_source(source_id="SRC-002", independence_group="same-work"),
+        ]
+        source_ids = validator.validate_source_evidence(sources)
+        claim = self.valid_claim(source_ids=["SRC-001", "SRC-002"])
+
+        validator.validate_claim_evidence(
+            [claim], {"SRC-001", "SRC-002"}, {"RQ-001"}, True, sources
+        )
+
+        self.assertEqual({"SRC-001", "SRC-002"}, source_ids)
+        self.assertIn(
+            "RESEARCH_CLAIM_SOURCE_INDEPENDENCE_OVERSTATED",
+            self.codes(validator),
+        )
+
+    def test_low_quality_leads_cannot_be_only_contract_support(self) -> None:
+        validator = WorkspaceValidator(self.root)
+        source = self.valid_source(
+            quality_level=5,
+            usage_role="检索线索",
+        )
+        validator.validate_source_evidence([source])
+
+        validator.validate_claim_evidence(
+            [self.valid_claim()], {"SRC-001"}, {"RQ-001"}, True, [source]
+        )
+
+        self.assertIn(
+            "RESEARCH_CLAIM_SUPPORTED_ONLY_BY_LEADS", self.codes(validator)
+        )
+
+    def test_contract_claim_requires_citation_scope_and_causality_checks(self) -> None:
+        validator = WorkspaceValidator(self.root)
+        claim = self.valid_claim(
+            citation_support_verified=False,
+            numeric_details_verified=False,
+            scope_match_verified=False,
+            causality_checked=False,
+        )
+
+        validator.validate_claim_evidence(
+            [claim], {"SRC-001"}, {"RQ-001"}, True
+        )
+
+        self.assertIn(
+            "RESEARCH_CLAIM_CITATION_CHECK_INCOMPLETE", self.codes(validator)
+        )
+
+    def test_conflicting_claim_retains_reason_and_adverse_evidence(self) -> None:
+        validator = WorkspaceValidator(self.root)
+        claim = self.valid_claim(
+            conflict_status="存在冲突",
+            conflict_type="无",
+            conflict_reason=None,
+            adverse_evidence_retained=False,
+            eligible_for_research_contract=False,
+        )
+
+        validator.validate_claim_evidence(
+            [claim], {"SRC-001"}, {"RQ-001"}, False
+        )
+
+        codes = self.codes(validator)
+        self.assertIn("RESEARCH_CLAIM_CONFLICT_DETAIL_MISSING", codes)
+        self.assertIn("RESEARCH_CLAIM_ADVERSE_EVIDENCE_NOT_RETAINED", codes)
+
+    def test_resource_budget_excess_and_unexplained_null_are_rejected(self) -> None:
+        validator = WorkspaceValidator(self.root)
+        resource = self.valid_resource(
+            max_search_queries=2,
+            search_queries=3,
+            input_tokens=None,
+            unavailable_metrics=[],
+        )
+
+        validator.validate_phase_one_resources([resource], [], [], True)
+
+        codes = self.codes(validator)
+        self.assertIn("RESEARCH_RESOURCE_BUDGET_EXCEEDED", codes)
+        self.assertIn("RESEARCH_RESOURCE_NULL_REASON_MISSING", codes)
+
+    def test_summary_size_uses_current_phase_one_budget(self) -> None:
+        summaries = self.root / "research/summaries"
+        summaries.mkdir(parents=True)
+        (summaries / "RQ-001.md").write_text("123456", encoding="utf-8")
+        validator = WorkspaceValidator(self.root)
+
+        validator.validate_phase_one_resources(
+            [self.valid_resource(max_summary_chars=5)], [], [], True
+        )
+
+        self.assertIn("RESEARCH_SUMMARY_SIZE_EXCEEDED", self.codes(validator))
+
+    def test_search_log_emits_rotation_warning_at_threshold(self) -> None:
+        research = self.root / "research"
+        research.mkdir()
+        entries = [
+            self.valid_search_entry(query_id="QRY-001"),
+            self.valid_search_entry(query_id="QRY-002"),
+        ]
+        (research / "search_log.jsonl").write_text(
+            "".join(json.dumps(entry, ensure_ascii=False) + "\n" for entry in entries),
+            encoding="utf-8",
+        )
+        validator = WorkspaceValidator(self.root)
+
+        with mock.patch(
+            "scripts.validate_workspace.SEARCH_LOG_LINE_WARNING", 2
+        ):
+            validator.validate_search_log(
+                {"SRC-001"}, {"RQ-001"}, False, {"DIR-001"}
+            )
+
+        self.assertIn("RESEARCH_SEARCH_LOG_ROTATION_REQUIRED", self.codes(validator))
+
+    def test_archived_and_active_search_ids_must_be_globally_unique(self) -> None:
+        research = self.root / "research"
+        archive = research / "archive"
+        archive.mkdir(parents=True)
+        entry = self.valid_search_entry(query_id="QRY-001")
+        serialized = json.dumps(entry, ensure_ascii=False) + "\n"
+        (research / "search_log.jsonl").write_text(serialized, encoding="utf-8")
+        (archive / "search_log-QRY-001-QRY-001.jsonl").write_text(
+            serialized, encoding="utf-8"
+        )
+        validator = WorkspaceValidator(self.root)
+
+        validator.validate_search_log(
+            {"SRC-001"}, {"RQ-001"}, False, {"DIR-001"}
+        )
+
+        self.assertIn("RESEARCH_QUERY_ID_DUPLICATE", self.codes(validator))
 
     def test_empty_evidence_and_absent_registries_are_valid_before_research(self) -> None:
         self.copy_empty_research_evidence()
@@ -388,7 +561,14 @@ class WorkspaceValidatorTests(unittest.TestCase):
 
         target = self.root / "research"
         target.mkdir(parents=True, exist_ok=True)
-        for name in ("search_log.jsonl", "sources.yaml", "claims.yaml", "decisions.yaml"):
+        for name in (
+            "search_log.jsonl",
+            "search_coverage.yaml",
+            "sources.yaml",
+            "claims.yaml",
+            "decisions.yaml",
+            "resources.yaml",
+        ):
             shutil.copyfile(REPOSITORY_ROOT / "research" / name, target / name)
 
     @staticmethod
@@ -548,6 +728,20 @@ class WorkspaceValidatorTests(unittest.TestCase):
 - 最大外部 API 预算：0 元。
 - 截止日期：2026-07-31。
 
+### 阶段一调研预算摘要
+
+- 最大搜索查询数：10 次。
+- 最大搜索页面数：20 页。
+- 最大外部工具调用数：0 次。
+- 阶段一最大 API 调用数：0 次。
+- 阶段一最大费用：0 CNY。
+- 单个来源最大抽取字符数：2000 字符。
+- 单份调研摘要最大字符数：4000 字符。
+- `RESEARCH.md` 最大建议行数：1000 行。
+- `RESEARCH.md` 最大建议字节数：200000 字节。
+- 阶段一证据总存储上限：1000000 字节。
+- 达到预算后的停止行为：停止对应新增工作，保留证据并向用户披露未覆盖范围。
+
 ## Skills 与辅助工具
 
 - 计划使用的 Skills：不适用：合成演练使用标准库。
@@ -617,21 +811,105 @@ class WorkspaceValidatorTests(unittest.TestCase):
     def write_synthetic_evidence(project_root: Path) -> None:
         """Write runtime-only fictional query, source, claim, and decision evidence."""
 
-        search_entry = {
-            "query_id": "QRY-001",
-            "research_question_ids": ["RQ-001"],
-            "query": "synthetic keyword classifier robustness fixture specification",
-            "language": "en",
-            "platform": "local synthetic fixture catalog",
-            "searched_at": "2026-07-21T10:00:00+08:00",
-            "filters": {"domain": "example.invalid", "date": "2026-07-21"},
-            "result_count": 1,
-            "included_source_ids": ["SRC-001"],
-            "exclusions": [],
-            "counterevidence_search": True,
-        }
+        search_entries = [
+            {
+                "query_id": "QRY-001",
+                "direction_ids": ["DIR-001"],
+                "research_question_ids": ["RQ-001"],
+                "search_categories": sorted(REQUIRED_SEARCH_CATEGORIES),
+                "query": "合成关键词分类器 稳定性 baseline 失败 数据 指标 许可 相似工作",
+                "language": "zh",
+                "keyword_variants": ["规则分类", "扰动稳定性", "负面结果"],
+                "platform": "local synthetic fixture catalog",
+                "searched_at": "2026-07-22T10:00:00+08:00",
+                "filters": {"date": "2026-07-22"},
+                "result_count": 1,
+                "included_source_ids": ["SRC-001"],
+                "exclusions": [],
+                "counterevidence_search": True,
+                "citation_tracking": True,
+                "returned_content_size": 180,
+                "returned_content_unit": "characters",
+                "page_count": 1,
+                "external_tool_calls": 0,
+            },
+            {
+                "query_id": "QRY-002",
+                "direction_ids": ["DIR-002"],
+                "research_question_ids": [],
+                "search_categories": sorted(REQUIRED_SEARCH_CATEGORIES),
+                "query": "synthetic external model robustness baseline failures datasets metrics licensing related work",
+                "language": "en",
+                "keyword_variants": ["model robustness", "negative results", "related work"],
+                "platform": "local synthetic fixture catalog",
+                "searched_at": "2026-07-22T10:05:00+08:00",
+                "filters": {"date": "2026-07-22"},
+                "result_count": 1,
+                "included_source_ids": ["SRC-001"],
+                "exclusions": [],
+                "counterevidence_search": True,
+                "citation_tracking": True,
+                "returned_content_size": 220,
+                "returned_content_unit": "characters",
+                "page_count": 1,
+                "external_tool_calls": 0,
+            },
+        ]
         (project_root / "research/search_log.jsonl").write_text(
-            json.dumps(search_entry, ensure_ascii=False) + "\n", encoding="utf-8"
+            "".join(
+                json.dumps(entry, ensure_ascii=False) + "\n"
+                for entry in search_entries
+            ),
+            encoding="utf-8",
+        )
+        coverage = {
+            category: "已覆盖" for category in REQUIRED_SEARCH_CATEGORIES
+        }
+        coverage_entries = [
+            {
+                "direction_id": "DIR-001",
+                "research_question_ids": ["RQ-001"],
+                "query_ids": ["QRY-001"],
+            },
+            {
+                "direction_id": "DIR-002",
+                "research_question_ids": [],
+                "query_ids": ["QRY-002"],
+            },
+        ]
+        coverage_lines = ["schema_version: 1", "direction_coverage:"]
+        for entry in coverage_entries:
+            coverage_lines.extend(
+                [
+                    f'  - direction_id: "{entry["direction_id"]}"',
+                    "    research_question_ids: "
+                    + json.dumps(entry["research_question_ids"], ensure_ascii=False),
+                    "    query_ids: "
+                    + json.dumps(entry["query_ids"], ensure_ascii=False),
+                    "    coverage: " + json.dumps(coverage, ensure_ascii=False),
+                    "    coverage_notes: {}",
+                    '    chinese_keywords: ["规则分类", "稳定性", "失败结果"]',
+                    '    english_keywords: ["rule classification", "robustness", "negative results"]',
+                    '    citation_tracking_source_ids: ["SRC-001"]',
+                    '    planned_languages: ["zh", "en"]',
+                    '    covered_languages: ["zh", "en"]',
+                    '    planned_platforms: ["local synthetic fixture catalog"]',
+                    '    covered_platforms: ["local synthetic fixture catalog"]',
+                    '    planned_date_range: "2026-07-22 synthetic range"',
+                    '    covered_date_range: "2026-07-22 synthetic range"',
+                    "    independent_source_yield_history: [1.0, 0.0]",
+                    "    new_method_categories_history: [1, 0]",
+                    "    key_questions_covered: true",
+                    "    counterevidence_completed: true",
+                    "    citation_tracking_completed: true",
+                    "    uncovered_scope: []",
+                    '    stop_reason: "observable yield declined and the latest batch added no method category"',
+                    '    stop_status: "已停止"',
+                    '    last_updated_at: "2026-07-22T10:10:00+08:00"',
+                ]
+            )
+        (project_root / "research/search_coverage.yaml").write_text(
+            "\n".join(coverage_lines) + "\n", encoding="utf-8"
         )
         (project_root / "research/sources.yaml").write_text(
             """schema_version: 1
@@ -639,18 +917,25 @@ sources:
   - source_id: "SRC-001"
     title: "Synthetic fixture specification"
     creators: ["Local test suite"]
-    url: "https://example.invalid/synthetic-fixture-v1"
-    doi_or_identifier: null
-    published_at: "2026-07-21"
-    accessed_at: "2026-07-21"
+    url: null
+    doi_or_identifier: "urn:codex-test:synthetic-fixture-v1"
+    published_at: "2026-07-22"
+    accessed_at: "2026-07-22"
     source_type: "测试规范"
+    quality_level: 1
     provenance_level: "原始来源"
+    primary_source_id: null
+    independence_group: "synthetic-fixture-v1"
+    usage_role: "关键证据"
     data_classification: "公开"
     version: "1"
     license: "CC0-1.0"
     contains_restricted_content: false
     external_transfer_allowed: false
     accessibility_status: "可访问"
+    locator_exists: true
+    locator_verified_at: "2026-07-22"
+    locator_verification_method: "官方登记"
     update_retraction_conflict_status: "无已知问题"
     notes: "Runtime-only fictional fixture metadata."
 """,
@@ -669,10 +954,63 @@ claims:
     temporal_status: "当前有效"
     conflict_status: "无已知冲突"
     verification_status: "已核验"
+    citation_support_verified: true
+    numeric_details_verified: true
+    scope_match_verified: true
+    causality_checked: true
+    model_inference_status: "非模型推论"
+    conflict_type: "无"
+    conflict_reason: null
+    uncertainty_notes: null
+    adverse_evidence_retained: true
+    verification_notes: "Checked the synthetic locator, scope, version, and evidence location."
     eligible_for_research_contract: true
 """,
             encoding="utf-8",
         )
+        resources_path = project_root / "research/resources.yaml"
+        resources_template = """schema_version: 1
+snapshots:
+  - resource_id: "RES-001"
+    recorded_at: "2026-07-22T10:15:00+08:00"
+    status: "当前"
+    max_search_queries: 10
+    max_pages: 20
+    max_external_tool_calls: 0
+    max_api_calls: 0
+    max_cost: 0
+    cost_currency: "CNY"
+    max_source_extract_chars: 2000
+    max_summary_chars: 4000
+    max_research_lines: 1000
+    max_research_bytes: 200000
+    max_evidence_bytes: 1000000
+    stop_behavior: "达到任一上限时停止对应新增工作并报告未覆盖范围"
+    input_tokens: null
+    output_tokens: null
+    search_return_size: 400
+    search_return_unit: "characters"
+    search_queries: 2
+    search_pages: 2
+    external_tool_calls: 0
+    api_calls: 0
+    elapsed_seconds: 900
+    estimated_cost: 0
+    evidence_file_bytes: {evidence_bytes}
+    claim_count: 1
+    context_compactions: 0
+    unavailable_metrics: ["input_tokens: local fixture does not report tokens", "output_tokens: local fixture does not report tokens"]
+"""
+        evidence_bytes = 0
+        for _ in range(4):
+            resources_path.write_text(
+                resources_template.format(evidence_bytes=evidence_bytes),
+                encoding="utf-8",
+            )
+            measured = WorkspaceValidator(project_root).phase_one_evidence_bytes()
+            if measured == evidence_bytes:
+                break
+            evidence_bytes = measured
         affected_fields = [
             "研究目标",
             "研究问题",
@@ -702,6 +1040,15 @@ decisions:
 """,
             encoding="utf-8",
         )
+        for _ in range(4):
+            resources_path.write_text(
+                resources_template.format(evidence_bytes=evidence_bytes),
+                encoding="utf-8",
+            )
+            measured = WorkspaceValidator(project_root).phase_one_evidence_bytes()
+            if measured == evidence_bytes:
+                break
+            evidence_bytes = measured
 
     @staticmethod
     def initialize_git_repository(project_root: Path) -> None:
@@ -726,6 +1073,144 @@ decisions:
         )
 
     @staticmethod
+    def valid_search_entry(**overrides: object) -> dict[str, object]:
+        """Create one schema-valid search-log entry."""
+
+        entry: dict[str, object] = {
+            "query_id": "QRY-001",
+            "direction_ids": ["DIR-001"],
+            "research_question_ids": ["RQ-001"],
+            "search_categories": ["背景"],
+            "query": "synthetic background query",
+            "language": "en",
+            "keyword_variants": ["background"],
+            "platform": "local fixture",
+            "searched_at": "2026-07-22T10:00:00+08:00",
+            "filters": {},
+            "result_count": 1,
+            "included_source_ids": ["SRC-001"],
+            "exclusions": [],
+            "counterevidence_search": False,
+            "citation_tracking": False,
+            "returned_content_size": 10,
+            "returned_content_unit": "characters",
+            "page_count": 1,
+            "external_tool_calls": 0,
+        }
+        entry.update(overrides)
+        return entry
+
+    @staticmethod
+    def valid_search_coverage(**overrides: object) -> dict[str, object]:
+        """Create one schema-valid stopped direction-coverage entry."""
+
+        entry: dict[str, object] = {
+            "direction_id": "DIR-001",
+            "research_question_ids": ["RQ-001"],
+            "query_ids": ["QRY-001"],
+            "coverage": {
+                category: "已覆盖" for category in REQUIRED_SEARCH_CATEGORIES
+            },
+            "coverage_notes": {},
+            "chinese_keywords": ["背景", "失败"],
+            "english_keywords": ["background", "failure"],
+            "citation_tracking_source_ids": ["SRC-001"],
+            "planned_languages": ["zh", "en"],
+            "covered_languages": ["zh", "en"],
+            "planned_platforms": ["local fixture"],
+            "covered_platforms": ["local fixture"],
+            "planned_date_range": "2020-2026",
+            "covered_date_range": "2020-2026",
+            "independent_source_yield_history": [1.0, 0.0],
+            "new_method_categories_history": [1, 0],
+            "key_questions_covered": True,
+            "counterevidence_completed": True,
+            "citation_tracking_completed": True,
+            "uncovered_scope": [],
+            "stop_reason": "independent-source yield declined and no new method category appeared",
+            "stop_status": "已停止",
+            "last_updated_at": "2026-07-22T10:10:00+08:00",
+        }
+        entry.update(overrides)
+        return entry
+
+    @staticmethod
+    def valid_source(**overrides: object) -> dict[str, object]:
+        """Create one schema-valid high-quality source entry."""
+
+        source: dict[str, object] = {
+            "source_id": "SRC-001",
+            "title": "Synthetic primary source",
+            "creators": ["Test institution"],
+            "url": None,
+            "doi_or_identifier": "urn:test:source-001",
+            "published_at": "2026-07-22",
+            "accessed_at": "2026-07-22",
+            "source_type": "测试规范",
+            "quality_level": 1,
+            "provenance_level": "原始来源",
+            "primary_source_id": None,
+            "independence_group": "source-001",
+            "usage_role": "关键证据",
+            "version": "1",
+            "license": "CC0-1.0",
+            "data_classification": "公开",
+            "contains_restricted_content": False,
+            "external_transfer_allowed": False,
+            "accessibility_status": "可访问",
+            "locator_exists": True,
+            "locator_verified_at": "2026-07-22",
+            "locator_verification_method": "官方登记",
+            "update_retraction_conflict_status": "无已知问题",
+            "notes": None,
+        }
+        source.update(overrides)
+        if "source_id" in overrides and "doi_or_identifier" not in overrides:
+            source["doi_or_identifier"] = f"urn:test:{source['source_id']}"
+        return source
+
+    @staticmethod
+    def valid_resource(**overrides: object) -> dict[str, object]:
+        """Create one schema-valid phase-one resource snapshot."""
+
+        resource: dict[str, object] = {
+            "resource_id": "RES-001",
+            "recorded_at": "2026-07-22T10:15:00+08:00",
+            "status": "当前",
+            "max_search_queries": 10,
+            "max_pages": 20,
+            "max_external_tool_calls": 10,
+            "max_api_calls": 0,
+            "max_cost": 0,
+            "cost_currency": "CNY",
+            "max_source_extract_chars": 2000,
+            "max_summary_chars": 4000,
+            "max_research_lines": 1000,
+            "max_research_bytes": 200000,
+            "max_evidence_bytes": 1000000,
+            "stop_behavior": "达到任一上限时停止对应新增工作",
+            "input_tokens": None,
+            "output_tokens": None,
+            "search_return_size": 0,
+            "search_return_unit": "characters",
+            "search_queries": 0,
+            "search_pages": 0,
+            "external_tool_calls": 0,
+            "api_calls": 0,
+            "elapsed_seconds": 0,
+            "estimated_cost": 0,
+            "evidence_file_bytes": 0,
+            "claim_count": 0,
+            "context_compactions": 0,
+            "unavailable_metrics": [
+                "input_tokens: unavailable in local fixture",
+                "output_tokens: unavailable in local fixture",
+            ],
+        }
+        resource.update(overrides)
+        return resource
+
+    @staticmethod
     def valid_claim(**overrides: object) -> dict[str, object]:
         """Create one schema-valid claim entry."""
 
@@ -740,6 +1225,16 @@ decisions:
             "temporal_status": "当前有效",
             "conflict_status": "无已知冲突",
             "verification_status": "已核验",
+            "citation_support_verified": True,
+            "numeric_details_verified": True,
+            "scope_match_verified": True,
+            "causality_checked": True,
+            "model_inference_status": "非模型推论",
+            "conflict_type": "无",
+            "conflict_reason": None,
+            "uncertainty_notes": None,
+            "adverse_evidence_retained": True,
+            "verification_notes": "Checked against the synthetic fixture.",
             "eligible_for_research_contract": True,
         }
         claim.update(overrides)

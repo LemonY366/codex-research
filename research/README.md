@@ -10,9 +10,12 @@
 research/
 ├── README.md
 ├── search_log.jsonl   # 每行一次实际检索，使用 QRY-<nnn>
+├── search_coverage.yaml # 每个 DIR 的覆盖与停止依据
 ├── sources.yaml       # 正式来源元数据，使用 SRC-<nnn>
 ├── claims.yaml        # 最小事实主张与证据关系，使用 CLM-<nnn>
 ├── decisions.yaml     # 研究决策与支撑链，使用 DEC-<nnn>
+├── resources.yaml     # 阶段一预算与累计资源快照
+├── archive/           # 已封存、不可倒改的搜索日志分片
 └── summaries/         # 按研究问题生成的精简、可回查摘要
 ```
 
@@ -24,16 +27,19 @@ research/
 
 ## `search_log.jsonl`
 
-文件使用 UTF-8 JSON Lines；每个非空行必须是一个完整 JSON 对象，不允许跨行、注释或尾随逗号。一次实际查询对应一行，查询 ID 使用 `QRY-<nnn>`。记录完成后按追加式证据处理；需要修正时追加新的查询记录，并通过可选的 `supersedes_query_id` 指向旧记录，不原地美化历史查询。
+文件使用 UTF-8 JSON Lines；每个非空行必须是一个完整 JSON 对象，不允许跨行、注释或尾随逗号。一次实际查询对应一行，查询 ID 从 `QRY-001` 开始，数字部分至少三位且增长时可以超过三位。记录完成后按追加式证据处理；需要修正时追加新的查询记录，并通过可选的 `supersedes_query_id` 指向旧记录，不原地美化历史查询。
 
 必需字段：
 
 | 字段 | 类型 | 说明 |
 | --- | --- | --- |
 | `query_id` | string | 唯一 `QRY-<nnn>` |
+| `direction_ids` | string[] | 对应的 `DIR-<nnn>`，进入方向搜索后不得为空 |
 | `research_question_ids` | string[] | 对应的 `RQ-<nnn>`；方向探索阶段可为空数组 |
+| `search_categories` | string[] | 本次实际覆盖的背景、方法、baseline、空白、负面结果、数据指标、许可可行性或相似工作 |
 | `query` | string | 实际执行且已脱敏的查询式 |
 | `language` | string | 查询语言或语言标签 |
+| `keyword_variants` | string[] | 本次使用的同义词、中英文或方法词扩展 |
 | `platform` | string | 搜索引擎、数据库、站点或工具名称 |
 | `searched_at` | string | 带时区的 ISO 8601 检索时间 |
 | `filters` | object | 时间、域名及其他实际使用的过滤条件；未使用时保存空对象 |
@@ -41,8 +47,30 @@ research/
 | `included_source_ids` | string[] | 本次纳入的 `SRC-<nnn>` |
 | `exclusions` | object[] | 被排除结果的非敏感引用及排除原因；没有时为空数组 |
 | `counterevidence_search` | boolean | 是否以反证、失败、负面结果或相似工作为目标 |
+| `citation_tracking` | boolean | 是否执行向前、向后或等价的引用追踪 |
+| `returned_content_size` | integer/null | 本次返回内容的 token 或字符数；不可得时为 `null` |
+| `returned_content_unit` | string | `tokens`、`characters` 或 `unavailable` |
+| `page_count` | integer/null | 实际检查页面数量；不可得时为 `null` |
+| `external_tool_calls` | integer/null | 本查询产生的外部工具调用次数；不可得时为 `null` |
 
 可选字段：`supersedes_query_id`、`notes`。查询式不得包含个人信息、受限样本、凭据、未获授权的内部标识或可还原敏感内容的长文本。
+
+活动日志达到 5,000 条有效记录或 2 MiB 时按 `archive/README.md` 轮转。活动与归档日志中的查询 ID 必须全局唯一，历史分片不得为了缩短文件而改写。
+
+## `search_coverage.yaml`
+
+文件顶层包含 `schema_version: 1` 和 `direction_coverage` 列表。每个 `DIR-<nnn>` 一个条目，使用扁平字段和 JSON 行内数组/对象，至少记录：
+
+- `direction_id`、`research_question_ids`、`query_ids`；
+- `coverage`：八类搜索对应 `已覆盖`、`部分覆盖`、`未覆盖` 或 `不适用`；`coverage_notes` 为部分覆盖、未覆盖和不适用项说明原因；
+- `chinese_keywords`、`english_keywords`、`citation_tracking_source_ids`；
+- `planned_languages`/`covered_languages`、`planned_platforms`/`covered_platforms`、`planned_date_range`/`covered_date_range`；
+- `independent_source_yield_history`：连续批次新增独立来源率；
+- `new_method_categories_history`：连续批次新增方法类别数量；
+- `key_questions_covered`、`counterevidence_completed`、`citation_tracking_completed`；
+- `uncovered_scope`、`stop_reason`、`stop_status`、`last_updated_at`。
+
+只有覆盖、反证、引用追踪、计划范围和停止代理均满足时才能标记 `已停止`。空数组表示确实没有未覆盖范围；不能用空值表示尚未检查。
 
 ## `sources.yaml`
 
@@ -57,12 +85,19 @@ research/
 - `doi_or_identifier`：DOI、标准号、报告号或其他稳定标识；没有时为 `null`。
 - `published_at`、`accessed_at`：发布日期与访问日期；未知发布日期为 `null`。
 - `source_type`：论文、标准、官方数据、技术文档、报告、网页等。
+- `quality_level`：整数 1–5，含义遵循 `docs/SEARCH_PROTOCOL.md`。
 - `provenance_level`：`原始来源` 或 `二手来源`。
+- `primary_source_id`：二手来源对应的已登记原始 `SRC`；原始来源为 `null`。
+- `independence_group`：同源转载、镜像和聚合内容使用同一非敏感组标识。
+- `usage_role`：`关键证据`、`补充证据` 或 `检索线索`。
 - `data_classification`：`公开`、`内部`、`受限`、`个人信息` 或 `混合`。
 - `version`、`license`：版本与许可证；未知时明确写 `unknown`，不得猜测。
 - `contains_restricted_content`：是否包含受限内容。
 - `external_transfer_allowed`：是否允许发送到外部服务；未确认时必须为 `false`。
 - `accessibility_status`：`可访问`、`部分可访问`、`不可访问` 或 `待复查`。
+- `locator_exists`：URL、DOI 或其他定位符是否已实际核验存在。
+- `locator_verified_at`：定位符核验日期或时间；未核验为 `null`。
+- `locator_verification_method`：`人工打开`、`DOI解析`、`官方登记`、`工具检查` 或 `未核验`。
 - `update_retraction_conflict_status`：`无已知问题`、`存在更新`、`已撤回`、`存在冲突` 或 `待复查`。
 - `notes`：必要的精简说明；没有时为 `null`。
 
@@ -84,11 +119,26 @@ research/
 - `temporal_status`：`当前有效`、`可能过期`、`已过期` 或 `待核验`。
 - `conflict_status`：`无已知冲突`、`存在冲突` 或 `待核验`。
 - `verification_status`：`已核验`、`部分核验`、`待核验` 或 `无法核验`。
+- `citation_support_verified`：引用位置是否支持该最小主张。
+- `numeric_details_verified`：数字、单位、日期和版本是否已检查；不含此类信息时表示已确认“不涉及”。
+- `scope_match_verified`：适用人群、场景、模型、时间和范围是否与来源一致。
+- `causality_checked`：是否检查相关性被错误扩大为因果关系。
+- `model_inference_status`：`非模型推论`、`已明确标注` 或 `未明确标注`。
+- `conflict_type`：`无`、`事实冲突`、`定义差异`、`版本差异`、`场景差异`、`多重差异` 或 `待判定`。
+- `conflict_reason`、`uncertainty_notes`：冲突可能原因和剩余不确定性；没有时为 `null`。
+- `adverse_evidence_retained`：不利来源、反例和负面结果是否得到保留。
+- `verification_notes`：上述核验的最小必要说明。
 - `eligible_for_research_contract`：是否允许作为 `RESEARCH.md` 当前合同判断的证据。
 
 只有来源可识别、证据位置可回查且核验状态满足当前研究要求的主张，才可以将 `eligible_for_research_contract` 设为 `true`。模型自报置信度不能替代该字段。
 
 支撑研究合同的关键主张应尽量具有直接来源；只有部分支持或间接推论时必须保留质量警告和局限。`conflict_status: 存在冲突` 的合同主张阻止阶段一门禁，不能通过多数投票或删除不利来源消除。
+
+## `resources.yaml`
+
+文件顶层包含 `schema_version: 1` 和 `snapshots` 列表，真实快照使用 `RES-<nnn>`。进入 `SEARCH` 前建立一个 `status: 当前` 的快照；预算调整或阶段压缩时新增快照并把旧记录改为 `已归档`，保留决策依据。
+
+预算字段至少包括最大搜索查询、页面、外部工具调用、API 调用、费用、单来源抽取字符、单摘要字符、`RESEARCH.md` 行数/字节和阶段一证据总字节，以及明确的停止行为。使用量字段至少包括输入/输出 token、搜索返回量及单位、查询和页面数、外部工具/API 调用、耗时、估算费用、证据字节、主张数和上下文压缩次数。不可获得的使用指标写 `null` 并列入 `unavailable_metrics`；预算字段不得用 `null` 绕过限制。
 
 ## `decisions.yaml`
 

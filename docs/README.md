@@ -8,11 +8,12 @@
 
 - 根目录 `README.md`：项目使用说明。
 - 根目录 `RESEARCH.md`：唯一的研究任务合同、全局阶段状态和阶段一任务。
-- `research/README.md`：阶段一查询、来源、主张、决策证据及压缩规则。
+- `research/README.md`：阶段一查询覆盖、来源、主张、决策、资源证据及压缩规则。
 - `experiments/TODO.md`：阶段二实验与分析任务。
 - `paper/TODO.md`：阶段三论文写作任务。
 - 根目录 `AGENTS.md`：Codex 必须遵守的长期规则。
 - `PHASE_ONE_PROTOCOL.md`：阶段一子状态机、字段确认与跨会话恢复协议。
+- `SEARCH_PROTOCOL.md`：候选方向搜索覆盖、来源质量、引用真实性、冲突、资源预算、压缩与体积控制协议。
 - `WORKFLOW_GATES.md`：三阶段的进入、完成、停止、恢复、回退与隐私门禁。
 - `SKILL_USAGE.md`：仓库级 Skills 的发现路径、三阶段使用规则、授权与停止条件。
 - `TEMPLATE_BOUNDARIES.md`：模板预置、Codex 动态生成、用户本地内容、运行证据与可选交付物的权威边界。

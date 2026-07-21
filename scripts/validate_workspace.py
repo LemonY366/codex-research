@@ -25,9 +25,12 @@ REQUIRED_PATHS = (
     "RESEARCH.md",
     "research/README.md",
     "research/search_log.jsonl",
+    "research/search_coverage.yaml",
     "research/sources.yaml",
     "research/claims.yaml",
     "research/decisions.yaml",
+    "research/resources.yaml",
+    "research/archive/README.md",
     "research/summaries/README.md",
     "experiments/TODO.md",
     "paper/TODO.md",
@@ -36,6 +39,7 @@ REQUIRED_PATHS = (
     "docs/TEMPLATE_BOUNDARIES.md",
     "docs/WORKFLOW_GATES.md",
     "docs/PHASE_ONE_PROTOCOL.md",
+    "docs/SEARCH_PROTOCOL.md",
     "docs/SKILL_USAGE.md",
     "datasets/README.md",
     "models/README.md",
@@ -139,13 +143,20 @@ EVIDENCE_REQUIRED_FIELDS = {
         "published_at",
         "accessed_at",
         "source_type",
+        "quality_level",
         "provenance_level",
+        "primary_source_id",
+        "independence_group",
+        "usage_role",
         "version",
         "license",
         "data_classification",
         "contains_restricted_content",
         "external_transfer_allowed",
         "accessibility_status",
+        "locator_exists",
+        "locator_verified_at",
+        "locator_verification_method",
         "update_retraction_conflict_status",
         "notes",
     },
@@ -160,6 +171,16 @@ EVIDENCE_REQUIRED_FIELDS = {
         "temporal_status",
         "conflict_status",
         "verification_status",
+        "citation_support_verified",
+        "numeric_details_verified",
+        "scope_match_verified",
+        "causality_checked",
+        "model_inference_status",
+        "conflict_type",
+        "conflict_reason",
+        "uncertainty_notes",
+        "adverse_evidence_retained",
+        "verification_notes",
         "eligible_for_research_contract",
     },
     "decisions": {
@@ -177,9 +198,12 @@ EVIDENCE_REQUIRED_FIELDS = {
 }
 SEARCH_LOG_REQUIRED_FIELDS = {
     "query_id",
+    "direction_ids",
     "research_question_ids",
+    "search_categories",
     "query",
     "language",
+    "keyword_variants",
     "platform",
     "searched_at",
     "filters",
@@ -187,6 +211,93 @@ SEARCH_LOG_REQUIRED_FIELDS = {
     "included_source_ids",
     "exclusions",
     "counterevidence_search",
+    "citation_tracking",
+    "returned_content_size",
+    "returned_content_unit",
+    "page_count",
+    "external_tool_calls",
+}
+SEARCH_COVERAGE_REQUIRED_FIELDS = {
+    "direction_id",
+    "research_question_ids",
+    "query_ids",
+    "coverage",
+    "coverage_notes",
+    "chinese_keywords",
+    "english_keywords",
+    "citation_tracking_source_ids",
+    "planned_languages",
+    "covered_languages",
+    "planned_platforms",
+    "covered_platforms",
+    "planned_date_range",
+    "covered_date_range",
+    "independent_source_yield_history",
+    "new_method_categories_history",
+    "key_questions_covered",
+    "counterevidence_completed",
+    "citation_tracking_completed",
+    "uncovered_scope",
+    "stop_reason",
+    "stop_status",
+    "last_updated_at",
+}
+RESOURCE_REQUIRED_FIELDS = {
+    "resource_id",
+    "recorded_at",
+    "status",
+    "max_search_queries",
+    "max_pages",
+    "max_external_tool_calls",
+    "max_api_calls",
+    "max_cost",
+    "cost_currency",
+    "max_source_extract_chars",
+    "max_summary_chars",
+    "max_research_lines",
+    "max_research_bytes",
+    "max_evidence_bytes",
+    "stop_behavior",
+    "input_tokens",
+    "output_tokens",
+    "search_return_size",
+    "search_return_unit",
+    "search_queries",
+    "search_pages",
+    "external_tool_calls",
+    "api_calls",
+    "elapsed_seconds",
+    "estimated_cost",
+    "evidence_file_bytes",
+    "claim_count",
+    "context_compactions",
+    "unavailable_metrics",
+}
+REQUIRED_SEARCH_CATEGORIES = {
+    "背景",
+    "现有方法",
+    "baseline",
+    "研究空白",
+    "失败和负面结果",
+    "数据集与指标",
+    "许可与可行性",
+    "相似工作",
+}
+VALID_COVERAGE_STATUSES = {"已覆盖", "部分覆盖", "未覆盖", "不适用"}
+VALID_SEARCH_STOP_STATUSES = {"未开始", "进行中", "可停止", "已停止"}
+VALID_RETURN_SIZE_UNITS = {"tokens", "characters", "unavailable"}
+VALID_RESOURCE_STATUSES = {"当前", "已归档"}
+VALID_SOURCE_USAGE_ROLES = {"关键证据", "补充证据", "检索线索"}
+VALID_LOCATOR_METHODS = {"人工打开", "DOI解析", "官方登记", "工具检查", "未核验"}
+VALID_MODEL_INFERENCE_STATUSES = {"非模型推论", "已明确标注", "未明确标注"}
+VALID_CLAIM_CONFLICT_TYPES = {
+    "无",
+    "事实冲突",
+    "定义差异",
+    "版本差异",
+    "场景差异",
+    "多重差异",
+    "待判定",
 }
 VALID_SUPPORT_LEVELS = {
     "直接支持",
@@ -217,6 +328,8 @@ STAGE_TODO_LINE_WARNING = 500
 RESEARCH_LINE_WARNING = 600
 RESEARCH_BYTE_WARNING = 100_000
 SEARCH_STALE_DAYS = 180
+SEARCH_LOG_LINE_WARNING = 5_000
+SEARCH_LOG_BYTE_WARNING = 2 * 1024 * 1024
 CODEX_TENTATIVE_RATIO_WARNING = 0.5
 FORBIDDEN_EVIDENCE_FIELD_NAMES = {
     "api_key",
@@ -1320,6 +1433,17 @@ class WorkspaceValidator:
             "最大 API 调用次数",
             "最大外部 API 预算",
             "截止日期",
+            "最大搜索查询数",
+            "最大搜索页面数",
+            "最大外部工具调用数",
+            "阶段一最大 API 调用数",
+            "阶段一最大费用",
+            "单个来源最大抽取字符数",
+            "单份调研摘要最大字符数",
+            "`RESEARCH.md` 最大建议行数",
+            "`RESEARCH.md` 最大建议字节数",
+            "阶段一证据总存储上限",
+            "达到预算后的停止行为",
         ):
             value = self.extract_field(text, label)
             if value is None or value in PLACEHOLDER_CELLS or value.startswith("TODO"):
@@ -1654,6 +1778,12 @@ class WorkspaceValidator:
         )
         research_tables = self.parse_markdown_tables(research_text)
         contract_ids = self.collect_research_definition_ids(research_tables)
+        phase_one_state = self.extract_field(research_text, "阶段一子状态")
+        search_required = (
+            phase_one_state in VALID_PHASE_ONE_STATES
+            and PHASE_ONE_STATE_ORDER.index(phase_one_state)
+            >= PHASE_ONE_STATE_ORDER.index("SEARCH")
+        ) or transition_ready
 
         sources = self.read_flat_yaml_registry(
             "research/sources.yaml", "sources", "source_id"
@@ -1664,7 +1794,16 @@ class WorkspaceValidator:
         decisions = self.read_flat_yaml_registry(
             "research/decisions.yaml", "decisions", "decision_id"
         )
-        if sources is None or claims is None or decisions is None:
+        coverage = self.read_flat_yaml_registry(
+            "research/search_coverage.yaml", "direction_coverage", "direction_id"
+        )
+        resources = self.read_flat_yaml_registry(
+            "research/resources.yaml", "snapshots", "resource_id"
+        )
+        if any(
+            registry is None
+            for registry in (sources, claims, decisions, coverage, resources)
+        ):
             return
 
         source_ids = self.validate_source_evidence(sources)
@@ -1673,6 +1812,7 @@ class WorkspaceValidator:
             source_ids,
             contract_ids.get("研究问题 ID", set()),
             transition_ready,
+            source_entries=sources,
         )
         decision_ids = self.validate_decision_evidence(
             decisions,
@@ -1683,6 +1823,27 @@ class WorkspaceValidator:
             source_ids,
             contract_ids.get("研究问题 ID", set()),
             transition_ready,
+            contract_ids.get("候选方向 ID", set()),
+        )
+        query_ids = {
+            str(entry.get("query_id"))
+            for entry in search_entries
+            if isinstance(entry.get("query_id"), str)
+        }
+        self.validate_search_coverage(
+            coverage,
+            contract_ids.get("候选方向 ID", set()),
+            contract_ids.get("研究问题 ID", set()),
+            query_ids,
+            source_ids,
+            search_required,
+            transition_ready,
+        )
+        self.validate_phase_one_resources(
+            resources,
+            search_entries,
+            claims,
+            search_required,
         )
         self.check_phase_one_evidence_quality(
             sources,
@@ -1873,7 +2034,14 @@ class WorkspaceValidator:
                 relative,
                 source_id,
                 entry,
-                ("title", "accessed_at", "source_type", "version", "license"),
+                (
+                    "title",
+                    "accessed_at",
+                    "source_type",
+                    "independence_group",
+                    "version",
+                    "license",
+                ),
             )
             if not entry.get("url") and not entry.get("doi_or_identifier"):
                 self.add(
@@ -1889,7 +2057,30 @@ class WorkspaceValidator:
                 relative,
                 source_id,
                 entry,
-                ("contains_restricted_content", "external_transfer_allowed"),
+                (
+                    "contains_restricted_content",
+                    "external_transfer_allowed",
+                    "locator_exists",
+                ),
+            )
+            quality_level = entry.get("quality_level")
+            if (
+                not isinstance(quality_level, int)
+                or isinstance(quality_level, bool)
+                or quality_level not in range(1, 6)
+            ):
+                self.add(
+                    "ERROR",
+                    "RESEARCH_SOURCE_QUALITY_LEVEL_INVALID",
+                    relative,
+                    f"{source_id} quality_level must be an integer from 1 to 5",
+                )
+            self.require_enum(
+                relative,
+                source_id,
+                entry,
+                "usage_role",
+                VALID_SOURCE_USAGE_ROLES,
             )
             self.require_enum(
                 relative,
@@ -1916,6 +2107,13 @@ class WorkspaceValidator:
                 relative,
                 source_id,
                 entry,
+                "locator_verification_method",
+                VALID_LOCATOR_METHODS,
+            )
+            self.require_enum(
+                relative,
+                source_id,
+                entry,
                 "update_retraction_conflict_status",
                 VALID_SOURCE_LIFECYCLE_STATUSES,
             )
@@ -1930,6 +2128,50 @@ class WorkspaceValidator:
                     relative,
                     f"{source_id} contains restricted content without a restricted classification",
                 )
+            if entry.get("locator_exists") is True:
+                if not entry.get("locator_verified_at") or entry.get(
+                    "locator_verification_method"
+                ) == "未核验":
+                    self.add(
+                        "ERROR",
+                        "RESEARCH_SOURCE_LOCATOR_VERIFICATION_MISSING",
+                        relative,
+                        f"{source_id} locator exists without a verification date and method",
+                    )
+            elif entry.get("usage_role") == "关键证据":
+                self.add(
+                    "ERROR",
+                    "RESEARCH_KEY_SOURCE_LOCATOR_UNVERIFIED",
+                    relative,
+                    f"{source_id} cannot be key evidence before its locator is verified",
+                )
+            if quality_level in {4, 5} and entry.get("usage_role") == "关键证据":
+                self.add(
+                    "ERROR",
+                    "RESEARCH_LOW_QUALITY_SOURCE_USED_AS_KEY",
+                    relative,
+                    f"{source_id} quality level {quality_level} may only be a lead or supplement",
+                )
+        for entry in entries:
+            source_id = entry.get("source_id")
+            if not isinstance(source_id, str):
+                continue
+            primary_source_id = entry.get("primary_source_id")
+            if entry.get("provenance_level") == "二手来源":
+                if primary_source_id not in source_ids or primary_source_id == source_id:
+                    self.add(
+                        "ERROR",
+                        "RESEARCH_SECONDARY_SOURCE_PRIMARY_UNRESOLVED",
+                        relative,
+                        f"{source_id} must trace to a different registered primary source",
+                    )
+            elif primary_source_id is not None:
+                self.add(
+                    "ERROR",
+                    "RESEARCH_PRIMARY_SOURCE_LINK_INVALID",
+                    relative,
+                    f"{source_id} is an original source and primary_source_id must be null",
+                )
         return source_ids
 
     def validate_claim_evidence(
@@ -1938,12 +2180,18 @@ class WorkspaceValidator:
         source_ids: set[str],
         rq_ids: set[str],
         transition_ready: bool,
+        source_entries: list[dict[str, object]] | None = None,
     ) -> tuple[set[str], set[str]]:
         """Validate claims and return all and contract-eligible claim IDs."""
 
         relative = "research/claims.yaml"
         claim_ids: set[str] = set()
         eligible_claim_ids: set[str] = set()
+        sources_by_id = {
+            str(source.get("source_id")): source
+            for source in (source_entries or [])
+            if isinstance(source.get("source_id"), str)
+        }
         for entry in entries:
             self.require_evidence_fields(relative, "claims", entry)
             self.reject_credential_fields(relative, entry)
@@ -2043,6 +2291,87 @@ class WorkspaceValidator:
                 "verification_status",
                 VALID_VERIFICATION_STATUSES,
             )
+            self.require_boolean_fields(
+                relative,
+                claim_id,
+                entry,
+                (
+                    "citation_support_verified",
+                    "numeric_details_verified",
+                    "scope_match_verified",
+                    "causality_checked",
+                    "adverse_evidence_retained",
+                ),
+            )
+            self.require_enum(
+                relative,
+                claim_id,
+                entry,
+                "model_inference_status",
+                VALID_MODEL_INFERENCE_STATUSES,
+            )
+            self.require_enum(
+                relative,
+                claim_id,
+                entry,
+                "conflict_type",
+                VALID_CLAIM_CONFLICT_TYPES,
+            )
+            conflict_status = entry.get("conflict_status")
+            conflict_type = entry.get("conflict_type")
+            if conflict_status == "存在冲突":
+                if conflict_type in {"无", None} or not entry.get("conflict_reason"):
+                    self.add(
+                        "ERROR",
+                        "RESEARCH_CLAIM_CONFLICT_DETAIL_MISSING",
+                        relative,
+                        f"{claim_id} must classify and explain its evidence conflict",
+                    )
+                if entry.get("adverse_evidence_retained") is not True:
+                    self.add(
+                        "ERROR",
+                        "RESEARCH_CLAIM_ADVERSE_EVIDENCE_NOT_RETAINED",
+                        relative,
+                        f"{claim_id} conflict cannot be resolved by dropping adverse evidence",
+                    )
+            elif conflict_status == "无已知冲突" and conflict_type != "无":
+                self.add(
+                    "ERROR",
+                    "RESEARCH_CLAIM_CONFLICT_TYPE_INCONSISTENT",
+                    relative,
+                    f"{claim_id} has a conflict type without a conflict status",
+                )
+            if (
+                entry.get("support_level") == "间接推论"
+                and entry.get("model_inference_status") != "已明确标注"
+            ):
+                self.add(
+                    "ERROR",
+                    "RESEARCH_CLAIM_INFERENCE_UNDISCLOSED",
+                    relative,
+                    f"{claim_id} indirect inference must be explicitly disclosed",
+                )
+            if sources_by_id:
+                claim_source_entries = [
+                    sources_by_id[source_id]
+                    for source_id in claim_sources
+                    if source_id in sources_by_id
+                ]
+                groups = {
+                    str(source.get("independence_group"))
+                    for source in claim_source_entries
+                    if source.get("independence_group")
+                }
+                if (
+                    entry.get("source_independence") == "独立"
+                    and len(groups) < len(claim_source_entries)
+                ):
+                    self.add(
+                        "ERROR",
+                        "RESEARCH_CLAIM_SOURCE_INDEPENDENCE_OVERSTATED",
+                        relative,
+                        f"{claim_id} counts reposts or same-group sources as independent evidence",
+                    )
             eligible = entry.get("eligible_for_research_contract")
             if not isinstance(eligible, bool):
                 self.add(
@@ -2060,6 +2389,55 @@ class WorkspaceValidator:
                         relative,
                         f"{claim_id} cannot support the contract before verification",
                     )
+                incomplete_checks = [
+                    field
+                    for field in (
+                        "citation_support_verified",
+                        "numeric_details_verified",
+                        "scope_match_verified",
+                        "causality_checked",
+                        "adverse_evidence_retained",
+                    )
+                    if entry.get(field) is not True
+                ]
+                if incomplete_checks:
+                    self.add(
+                        "ERROR",
+                        "RESEARCH_CLAIM_CITATION_CHECK_INCOMPLETE",
+                        relative,
+                        f"{claim_id} is contract-eligible before checks complete: {', '.join(incomplete_checks)}",
+                    )
+                if entry.get("model_inference_status") == "未明确标注":
+                    self.add(
+                        "ERROR",
+                        "RESEARCH_CLAIM_INFERENCE_UNDISCLOSED",
+                        relative,
+                        f"{claim_id} cannot enter the contract with undisclosed model inference",
+                    )
+                if sources_by_id:
+                    quality_levels = [
+                        source.get("quality_level")
+                        for source in claim_source_entries
+                        if isinstance(source.get("quality_level"), int)
+                    ]
+                    if quality_levels and min(quality_levels) > 2:
+                        self.add(
+                            "WARN",
+                            "RESEARCH_KEY_CLAIM_WITHOUT_HIGH_QUALITY_SOURCE",
+                            relative,
+                            f"{claim_id} has no level-1 or level-2 source for a key research judgment",
+                        )
+                    if claim_source_entries and all(
+                        source.get("quality_level") in {4, 5}
+                        or source.get("usage_role") == "检索线索"
+                        for source in claim_source_entries
+                    ):
+                        self.add(
+                            "ERROR",
+                            "RESEARCH_CLAIM_SUPPORTED_ONLY_BY_LEADS",
+                            relative,
+                            f"{claim_id} is supported only by low-quality leads",
+                        )
                 if entry.get("conflict_status") == "存在冲突":
                     self.add(
                         "ERROR" if transition_ready else "WARN",
@@ -2208,26 +2586,51 @@ class WorkspaceValidator:
         source_ids: set[str],
         rq_ids: set[str],
         transition_ready: bool,
+        direction_ids: set[str] | None = None,
     ) -> list[dict[str, object]]:
         """Validate append-only JSONL query provenance and references."""
 
-        relative = "research/search_log.jsonl"
-        path = self.root / relative
-        if not path.is_file():
+        active_relative = "research/search_log.jsonl"
+        active_path = self.root / active_relative
+        if not active_path.is_file():
             return []
         query_ids: set[str] = set()
         parsed_entries: list[dict[str, object]] = []
-        try:
-            lines = path.read_text(encoding="utf-8").splitlines()
-        except (OSError, UnicodeError):
-            self.add(
-                "ERROR",
-                "RESEARCH_SEARCH_LOG_INVALID",
-                relative,
-                "search log is not valid UTF-8 text",
+        archive_root = self.root / "research/archive"
+        log_paths = [active_path]
+        if archive_root.is_dir():
+            log_paths.extend(sorted(archive_root.glob("search_log-*.jsonl")))
+        records: list[tuple[str, int, str]] = []
+        for log_path in log_paths:
+            relative = log_path.relative_to(self.root).as_posix()
+            try:
+                raw_text = log_path.read_text(encoding="utf-8")
+                lines = raw_text.splitlines()
+            except (OSError, UnicodeError):
+                self.add(
+                    "ERROR",
+                    "RESEARCH_SEARCH_LOG_INVALID",
+                    relative,
+                    "search log is not valid UTF-8 text",
+                )
+                continue
+            if log_path == active_path:
+                nonempty_line_count = sum(bool(line.strip()) for line in lines)
+                if (
+                    nonempty_line_count >= SEARCH_LOG_LINE_WARNING
+                    or len(raw_text.encode("utf-8")) >= SEARCH_LOG_BYTE_WARNING
+                ):
+                    self.add(
+                        "WARN",
+                        "RESEARCH_SEARCH_LOG_ROTATION_REQUIRED",
+                        relative,
+                        "active search log reached its line or byte rotation threshold",
+                    )
+            records.extend(
+                (relative, line_number, line)
+                for line_number, line in enumerate(lines, start=1)
             )
-            return []
-        for line_number, line in enumerate(lines, start=1):
+        for relative, line_number, line in records:
             if not line.strip():
                 continue
             try:
@@ -2261,7 +2664,7 @@ class WorkspaceValidator:
                 )
             query_id = entry.get("query_id")
             if not isinstance(query_id, str) or not re.fullmatch(
-                r"QRY-\d{3}", query_id
+                r"QRY-\d{3,}", query_id
             ):
                 self.add(
                     "ERROR",
@@ -2284,12 +2687,51 @@ class WorkspaceValidator:
                 entry,
                 ("query", "language", "platform", "searched_at"),
             )
+            query_directions = self.require_id_list(
+                relative,
+                query_id,
+                entry,
+                "direction_ids",
+                re.compile(r"DIR-\d{3}"),
+                allow_empty=False,
+            )
             query_rqs = self.require_id_list(
                 relative,
                 query_id,
                 entry,
                 "research_question_ids",
                 re.compile(r"RQ-\d{3}"),
+            )
+            expected_directions = direction_ids or set()
+            for direction_id in sorted(query_directions - expected_directions):
+                if transition_ready or expected_directions:
+                    self.add(
+                        "ERROR",
+                        "RESEARCH_QUERY_DIRECTION_UNRESOLVED",
+                        relative,
+                        f"{query_id} references undefined {direction_id}",
+                    )
+            search_categories = self.require_string_list(
+                relative,
+                query_id,
+                entry,
+                "search_categories",
+                allow_empty=False,
+            )
+            invalid_categories = search_categories - REQUIRED_SEARCH_CATEGORIES
+            if invalid_categories:
+                self.add(
+                    "ERROR",
+                    "RESEARCH_QUERY_CATEGORY_INVALID",
+                    relative,
+                    f"{query_id} has unsupported search categories: {', '.join(sorted(invalid_categories))}",
+                )
+            self.require_string_list(
+                relative,
+                query_id,
+                entry,
+                "keyword_variants",
+                allow_empty=False,
             )
             included_sources = self.require_id_list(
                 relative,
@@ -2360,9 +2802,56 @@ class WorkspaceValidator:
                     relative,
                     f"{query_id} counterevidence_search must be boolean",
                 )
+            if not isinstance(entry.get("citation_tracking"), bool):
+                self.add(
+                    "ERROR",
+                    "RESEARCH_QUERY_CITATION_TRACKING_INVALID",
+                    relative,
+                    f"{query_id} citation_tracking must be boolean",
+                )
+            returned_size = entry.get("returned_content_size")
+            returned_unit = entry.get("returned_content_unit")
+            if returned_unit not in VALID_RETURN_SIZE_UNITS:
+                self.add(
+                    "ERROR",
+                    "RESEARCH_QUERY_RETURN_UNIT_INVALID",
+                    relative,
+                    f"{query_id} returned_content_unit is invalid",
+                )
+            if returned_size is not None and (
+                not isinstance(returned_size, int)
+                or isinstance(returned_size, bool)
+                or returned_size < 0
+            ):
+                self.add(
+                    "ERROR",
+                    "RESEARCH_QUERY_RETURN_SIZE_INVALID",
+                    relative,
+                    f"{query_id} returned_content_size must be non-negative or null",
+                )
+            if (returned_size is None) != (returned_unit == "unavailable"):
+                self.add(
+                    "ERROR",
+                    "RESEARCH_QUERY_RETURN_SIZE_UNIT_MISMATCH",
+                    relative,
+                    f"{query_id} return size and unit must consistently represent unavailable data",
+                )
+            for numeric_field in ("page_count", "external_tool_calls"):
+                numeric_value = entry.get(numeric_field)
+                if numeric_value is not None and (
+                    not isinstance(numeric_value, int)
+                    or isinstance(numeric_value, bool)
+                    or numeric_value < 0
+                ):
+                    self.add(
+                        "ERROR",
+                        "RESEARCH_QUERY_RESOURCE_VALUE_INVALID",
+                        relative,
+                        f"{query_id} {numeric_field} must be non-negative or null",
+                    )
             superseded = entry.get("supersedes_query_id")
             if superseded is not None and not re.fullmatch(
-                r"QRY-\d{3}", str(superseded)
+                r"QRY-\d{3,}", str(superseded)
             ):
                 self.add(
                     "ERROR",
@@ -2371,6 +2860,586 @@ class WorkspaceValidator:
                     f"{query_id} has an invalid supersedes_query_id",
                 )
         return parsed_entries
+
+    def validate_search_coverage(
+        self,
+        entries: list[dict[str, object]],
+        direction_ids: set[str],
+        rq_ids: set[str],
+        query_ids: set[str],
+        source_ids: set[str],
+        search_required: bool,
+        transition_ready: bool,
+    ) -> set[str]:
+        """Validate per-direction search breadth and observable stop proxies."""
+
+        relative = "research/search_coverage.yaml"
+        covered_direction_ids: set[str] = set()
+        for entry in entries:
+            missing = sorted(SEARCH_COVERAGE_REQUIRED_FIELDS - entry.keys())
+            if missing:
+                self.add(
+                    "ERROR",
+                    "RESEARCH_SEARCH_COVERAGE_FIELDS_MISSING",
+                    relative,
+                    f"coverage entry is missing: {', '.join(missing)}",
+                )
+            self.reject_credential_fields(relative, entry)
+            self.validate_evidence_minimal_disclosure(relative, entry)
+            direction_id = entry.get("direction_id")
+            if not isinstance(direction_id, str) or not re.fullmatch(
+                r"DIR-\d{3}", direction_id
+            ):
+                self.add(
+                    "ERROR",
+                    "RESEARCH_SEARCH_COVERAGE_DIRECTION_INVALID",
+                    relative,
+                    "direction_id must match DIR-<nnn>",
+                )
+                continue
+            if direction_id in covered_direction_ids:
+                self.add(
+                    "ERROR",
+                    "RESEARCH_SEARCH_COVERAGE_DIRECTION_DUPLICATE",
+                    relative,
+                    f"{direction_id} has more than one coverage entry",
+                )
+            covered_direction_ids.add(direction_id)
+            if direction_id not in direction_ids:
+                self.add(
+                    "ERROR",
+                    "RESEARCH_SEARCH_COVERAGE_DIRECTION_UNRESOLVED",
+                    relative,
+                    f"{direction_id} is not defined in RESEARCH.md",
+                )
+            coverage_rqs = self.require_id_list(
+                relative,
+                direction_id,
+                entry,
+                "research_question_ids",
+                re.compile(r"RQ-\d{3}"),
+            )
+            for rq_id in sorted(coverage_rqs - rq_ids):
+                self.add(
+                    "ERROR",
+                    "RESEARCH_SEARCH_COVERAGE_QUESTION_UNRESOLVED",
+                    relative,
+                    f"{direction_id} references undefined {rq_id}",
+                )
+            coverage_queries = self.require_id_list(
+                relative,
+                direction_id,
+                entry,
+                "query_ids",
+                re.compile(r"QRY-\d{3,}"),
+                allow_empty=not search_required,
+            )
+            for query_id in sorted(coverage_queries - query_ids):
+                self.add(
+                    "ERROR",
+                    "RESEARCH_SEARCH_COVERAGE_QUERY_UNRESOLVED",
+                    relative,
+                    f"{direction_id} references undefined {query_id}",
+                )
+            coverage = entry.get("coverage")
+            coverage_notes = entry.get("coverage_notes")
+            if not isinstance(coverage, dict) or set(coverage) != REQUIRED_SEARCH_CATEGORIES:
+                self.add(
+                    "ERROR",
+                    "RESEARCH_SEARCH_CATEGORIES_INCOMPLETE",
+                    relative,
+                    f"{direction_id} must record all required search categories",
+                )
+                coverage = {}
+            if not isinstance(coverage_notes, dict):
+                self.add(
+                    "ERROR",
+                    "RESEARCH_SEARCH_COVERAGE_NOTES_INVALID",
+                    relative,
+                    f"{direction_id} coverage_notes must be an object",
+                )
+                coverage_notes = {}
+            for category, category_status in coverage.items():
+                if category_status not in VALID_COVERAGE_STATUSES:
+                    self.add(
+                        "ERROR",
+                        "RESEARCH_SEARCH_CATEGORY_STATUS_INVALID",
+                        relative,
+                        f"{direction_id} {category} has an invalid coverage status",
+                    )
+                if category_status in {"部分覆盖", "未覆盖", "不适用"} and not str(
+                    coverage_notes.get(category, "")
+                ).strip():
+                    self.add(
+                        "ERROR",
+                        "RESEARCH_SEARCH_CATEGORY_REASON_MISSING",
+                        relative,
+                        f"{direction_id} {category} requires a coverage reason",
+                    )
+            for field in (
+                "chinese_keywords",
+                "english_keywords",
+                "planned_languages",
+                "covered_languages",
+                "planned_platforms",
+                "covered_platforms",
+                "uncovered_scope",
+            ):
+                self.require_string_list(
+                    relative,
+                    direction_id,
+                    entry,
+                    field,
+                    allow_empty=field == "uncovered_scope" or not search_required,
+                )
+            citation_sources = self.require_id_list(
+                relative,
+                direction_id,
+                entry,
+                "citation_tracking_source_ids",
+                re.compile(r"SRC-\d{3}"),
+                allow_empty=not search_required,
+            )
+            for source_id in sorted(citation_sources - source_ids):
+                self.add(
+                    "ERROR",
+                    "RESEARCH_SEARCH_CITATION_SOURCE_UNRESOLVED",
+                    relative,
+                    f"{direction_id} citation tracking references undefined {source_id}",
+                )
+            def string_values(field: str) -> set[str]:
+                value = entry.get(field)
+                return (
+                    set(value)
+                    if isinstance(value, list)
+                    and all(isinstance(item, str) for item in value)
+                    else set()
+                )
+
+            planned_languages = string_values("planned_languages")
+            covered_languages = string_values("covered_languages")
+            planned_platforms = string_values("planned_platforms")
+            covered_platforms = string_values("covered_platforms")
+            if not planned_languages.issubset(covered_languages):
+                self.add(
+                    "ERROR",
+                    "RESEARCH_SEARCH_LANGUAGE_SCOPE_INCOMPLETE",
+                    relative,
+                    f"{direction_id} has not covered every planned language",
+                )
+            if not planned_platforms.issubset(covered_platforms):
+                self.add(
+                    "ERROR",
+                    "RESEARCH_SEARCH_PLATFORM_SCOPE_INCOMPLETE",
+                    relative,
+                    f"{direction_id} has not covered every planned platform",
+                )
+            for field in ("planned_date_range", "covered_date_range", "last_updated_at"):
+                if not isinstance(entry.get(field), str) or not str(entry.get(field)).strip():
+                    self.add(
+                        "ERROR",
+                        "RESEARCH_SEARCH_COVERAGE_TEXT_MISSING",
+                        relative,
+                        f"{direction_id} {field} must be explicit",
+                    )
+            yield_history = entry.get("independent_source_yield_history")
+            if not isinstance(yield_history, list) or not all(
+                isinstance(value, (int, float))
+                and not isinstance(value, bool)
+                and 0 <= value <= 1
+                for value in yield_history
+            ):
+                self.add(
+                    "ERROR",
+                    "RESEARCH_SEARCH_YIELD_HISTORY_INVALID",
+                    relative,
+                    f"{direction_id} independent source yield history must contain rates from 0 to 1",
+                )
+                yield_history = []
+            method_history = entry.get("new_method_categories_history")
+            if not isinstance(method_history, list) or not all(
+                isinstance(value, int) and not isinstance(value, bool) and value >= 0
+                for value in method_history
+            ):
+                self.add(
+                    "ERROR",
+                    "RESEARCH_SEARCH_METHOD_HISTORY_INVALID",
+                    relative,
+                    f"{direction_id} new method history must contain non-negative integers",
+                )
+                method_history = []
+            for field in (
+                "key_questions_covered",
+                "counterevidence_completed",
+                "citation_tracking_completed",
+            ):
+                if not isinstance(entry.get(field), bool):
+                    self.add(
+                        "ERROR",
+                        "RESEARCH_SEARCH_STOP_BOOLEAN_INVALID",
+                        relative,
+                        f"{direction_id} {field} must be boolean",
+                    )
+            stop_status = entry.get("stop_status")
+            if stop_status not in VALID_SEARCH_STOP_STATUSES:
+                self.add(
+                    "ERROR",
+                    "RESEARCH_SEARCH_STOP_STATUS_INVALID",
+                    relative,
+                    f"{direction_id} has an invalid stop status",
+                )
+            stopped = stop_status == "已停止"
+            if stopped:
+                if len(yield_history) < 2 or yield_history[-1] >= yield_history[0]:
+                    self.add(
+                        "ERROR",
+                        "RESEARCH_SEARCH_STOP_YIELD_UNSUPPORTED",
+                        relative,
+                        f"{direction_id} lacks an observed decline in independent-source yield",
+                    )
+                if not method_history or method_history[-1] != 0:
+                    self.add(
+                        "ERROR",
+                        "RESEARCH_SEARCH_STOP_METHODS_UNSATURATED",
+                        relative,
+                        f"{direction_id} latest query batch still adds a method category",
+                    )
+                if any(value not in {"已覆盖", "不适用"} for value in coverage.values()):
+                    self.add(
+                        "ERROR",
+                        "RESEARCH_SEARCH_STOP_COVERAGE_INCOMPLETE",
+                        relative,
+                        f"{direction_id} stopped with incomplete search categories",
+                    )
+                if not all(
+                    entry.get(field) is True
+                    for field in (
+                        "key_questions_covered",
+                        "counterevidence_completed",
+                        "citation_tracking_completed",
+                    )
+                ):
+                    self.add(
+                        "ERROR",
+                        "RESEARCH_SEARCH_STOP_PROXY_INCOMPLETE",
+                        relative,
+                        f"{direction_id} stopped before all observable proxies were met",
+                    )
+                stop_reason = str(entry.get("stop_reason", "")).strip()
+                if not stop_reason or re.search(r"完全检索|穷尽所有|全部文献", stop_reason):
+                    self.add(
+                        "ERROR",
+                        "RESEARCH_SEARCH_STOP_REASON_INVALID",
+                        relative,
+                        f"{direction_id} must use observable stop reasons rather than completeness claims",
+                    )
+            if transition_ready and not stopped:
+                self.add(
+                    "ERROR",
+                    "RESEARCH_SEARCH_NOT_STOPPED",
+                    relative,
+                    f"{direction_id} has no completed search stop record",
+                )
+        if search_required:
+            for direction_id in sorted(direction_ids - covered_direction_ids):
+                self.add(
+                    "ERROR",
+                    "RESEARCH_SEARCH_COVERAGE_DIRECTION_MISSING",
+                    relative,
+                    f"{direction_id} has no search coverage record",
+                )
+        return covered_direction_ids
+
+    def validate_phase_one_resources(
+        self,
+        entries: list[dict[str, object]],
+        search_entries: list[dict[str, object]],
+        claims: list[dict[str, object]],
+        search_required: bool,
+    ) -> None:
+        """Validate phase-one budgets, resource metrics, and size limits."""
+
+        relative = "research/resources.yaml"
+        current_entries: list[dict[str, object]] = []
+        resource_ids: set[str] = set()
+        for entry in entries:
+            missing = sorted(RESOURCE_REQUIRED_FIELDS - entry.keys())
+            if missing:
+                self.add(
+                    "ERROR",
+                    "RESEARCH_RESOURCE_FIELDS_MISSING",
+                    relative,
+                    f"resource snapshot is missing: {', '.join(missing)}",
+                )
+            self.reject_credential_fields(relative, entry)
+            resource_id = entry.get("resource_id")
+            if not isinstance(resource_id, str) or not re.fullmatch(
+                r"RES-\d{3}", resource_id
+            ):
+                self.add(
+                    "ERROR",
+                    "RESEARCH_RESOURCE_ID_INVALID",
+                    relative,
+                    "resource_id must match RES-<nnn>",
+                )
+                continue
+            if resource_id in resource_ids:
+                self.add(
+                    "ERROR",
+                    "RESEARCH_RESOURCE_ID_DUPLICATE",
+                    relative,
+                    f"{resource_id} is defined more than once",
+                )
+            resource_ids.add(resource_id)
+            if entry.get("status") not in VALID_RESOURCE_STATUSES:
+                self.add(
+                    "ERROR",
+                    "RESEARCH_RESOURCE_STATUS_INVALID",
+                    relative,
+                    f"{resource_id} has an invalid status",
+                )
+            elif entry.get("status") == "当前":
+                current_entries.append(entry)
+            if not isinstance(entry.get("recorded_at"), str) or not str(
+                entry.get("recorded_at")
+            ).strip():
+                self.add(
+                    "ERROR",
+                    "RESEARCH_RESOURCE_DATE_MISSING",
+                    relative,
+                    f"{resource_id} recorded_at must be explicit",
+                )
+            budget_integer_fields = (
+                "max_search_queries",
+                "max_pages",
+                "max_external_tool_calls",
+                "max_api_calls",
+                "max_source_extract_chars",
+                "max_summary_chars",
+                "max_research_lines",
+                "max_research_bytes",
+                "max_evidence_bytes",
+            )
+            for field in budget_integer_fields:
+                value = entry.get(field)
+                if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+                    self.add(
+                        "ERROR",
+                        "RESEARCH_RESOURCE_BUDGET_INVALID",
+                        relative,
+                        f"{resource_id} {field} must be a non-negative integer",
+                    )
+            max_cost = entry.get("max_cost")
+            if (
+                not isinstance(max_cost, (int, float))
+                or isinstance(max_cost, bool)
+                or max_cost < 0
+            ):
+                self.add(
+                    "ERROR",
+                    "RESEARCH_RESOURCE_BUDGET_INVALID",
+                    relative,
+                    f"{resource_id} max_cost must be non-negative",
+                )
+            self.require_nonempty_string_fields(
+                relative,
+                resource_id,
+                entry,
+                ("cost_currency", "stop_behavior"),
+            )
+            if "停止" not in str(entry.get("stop_behavior", "")):
+                self.add(
+                    "ERROR",
+                    "RESEARCH_RESOURCE_STOP_BEHAVIOR_INVALID",
+                    relative,
+                    f"{resource_id} stop_behavior must explicitly stop new work at the limit",
+                )
+            usage_fields = (
+                "input_tokens",
+                "output_tokens",
+                "search_return_size",
+                "search_queries",
+                "search_pages",
+                "external_tool_calls",
+                "api_calls",
+                "elapsed_seconds",
+                "estimated_cost",
+                "evidence_file_bytes",
+                "claim_count",
+                "context_compactions",
+            )
+            unavailable = entry.get("unavailable_metrics")
+            if not isinstance(unavailable, list) or not all(
+                isinstance(item, str) and ":" in item for item in unavailable
+            ):
+                self.add(
+                    "ERROR",
+                    "RESEARCH_RESOURCE_UNAVAILABLE_METRICS_INVALID",
+                    relative,
+                    f"{resource_id} unavailable_metrics must use field: reason strings",
+                )
+                unavailable_names: set[str] = set()
+            else:
+                unavailable_names = {item.split(":", 1)[0] for item in unavailable}
+            for field in usage_fields:
+                value = entry.get(field)
+                if value is None:
+                    if field not in unavailable_names:
+                        self.add(
+                            "ERROR",
+                            "RESEARCH_RESOURCE_NULL_REASON_MISSING",
+                            relative,
+                            f"{resource_id} {field} is null without an unavailable reason",
+                        )
+                elif (
+                    not isinstance(value, (int, float))
+                    or isinstance(value, bool)
+                    or value < 0
+                ):
+                    self.add(
+                        "ERROR",
+                        "RESEARCH_RESOURCE_USAGE_INVALID",
+                        relative,
+                        f"{resource_id} {field} must be non-negative or null",
+                    )
+            if entry.get("search_return_unit") not in VALID_RETURN_SIZE_UNITS:
+                self.add(
+                    "ERROR",
+                    "RESEARCH_RESOURCE_RETURN_UNIT_INVALID",
+                    relative,
+                    f"{resource_id} search_return_unit is invalid",
+                )
+        if search_required and len(current_entries) != 1:
+            self.add(
+                "ERROR",
+                "RESEARCH_RESOURCE_CURRENT_SNAPSHOT_INVALID",
+                relative,
+                "exactly one current phase-one resource snapshot is required before SEARCH",
+            )
+        if not current_entries:
+            return
+        current = current_entries[0]
+
+        def current_budget_integer(field: str) -> int | None:
+            value = current.get(field)
+            return (
+                value
+                if isinstance(value, int) and not isinstance(value, bool) and value >= 0
+                else None
+            )
+
+        comparisons = (
+            ("search_queries", "max_search_queries"),
+            ("search_pages", "max_pages"),
+            ("external_tool_calls", "max_external_tool_calls"),
+            ("api_calls", "max_api_calls"),
+            ("estimated_cost", "max_cost"),
+        )
+        for usage_field, budget_field in comparisons:
+            usage = current.get(usage_field)
+            budget = current.get(budget_field)
+            if isinstance(usage, (int, float)) and isinstance(budget, (int, float)):
+                if usage > budget:
+                    self.add(
+                        "ERROR",
+                        "RESEARCH_RESOURCE_BUDGET_EXCEEDED",
+                        relative,
+                        f"{usage_field} exceeds {budget_field}; stop new work",
+                    )
+                elif usage == budget:
+                    self.add(
+                        "INFO",
+                        "RESEARCH_RESOURCE_BUDGET_REACHED",
+                        relative,
+                        f"{usage_field} reached its limit; no new corresponding work is allowed",
+                    )
+        if current.get("search_queries") != len(search_entries):
+            self.add(
+                "WARN",
+                "RESEARCH_RESOURCE_QUERY_COUNT_MISMATCH",
+                relative,
+                "resource search_queries does not match parsed search-log entries",
+            )
+        if current.get("claim_count") != len(claims):
+            self.add(
+                "WARN",
+                "RESEARCH_RESOURCE_CLAIM_COUNT_MISMATCH",
+                relative,
+                "resource claim_count does not match claims.yaml",
+            )
+        research_path = self.root / "RESEARCH.md"
+        if research_path.is_file():
+            research_text = research_path.read_text(encoding="utf-8")
+            max_research_lines = current_budget_integer("max_research_lines")
+            if max_research_lines is not None and len(
+                research_text.splitlines()
+            ) > max_research_lines:
+                self.add(
+                    "WARN",
+                    "RESEARCH_RESOURCE_RESEARCH_LINES_EXCEEDED",
+                    "RESEARCH.md",
+                    "RESEARCH.md exceeds the current suggested line budget",
+                )
+            max_research_bytes = current_budget_integer("max_research_bytes")
+            if max_research_bytes is not None and len(
+                research_text.encode("utf-8")
+            ) > max_research_bytes:
+                self.add(
+                    "WARN",
+                    "RESEARCH_RESOURCE_RESEARCH_BYTES_EXCEEDED",
+                    "RESEARCH.md",
+                    "RESEARCH.md exceeds the current suggested byte budget",
+                )
+        summary_limit = current_budget_integer("max_summary_chars")
+        summaries_root = self.root / "research/summaries"
+        if summaries_root.is_dir() and summary_limit is not None:
+            for path in summaries_root.glob("*.md"):
+                if path.name == "README.md":
+                    continue
+                if len(path.read_text(encoding="utf-8")) > summary_limit:
+                    self.add(
+                        "ERROR",
+                        "RESEARCH_SUMMARY_SIZE_EXCEEDED",
+                        path.relative_to(self.root).as_posix(),
+                        "summary exceeds max_summary_chars",
+                    )
+        evidence_bytes = self.phase_one_evidence_bytes()
+        max_evidence_bytes = current_budget_integer("max_evidence_bytes")
+        if max_evidence_bytes is not None and evidence_bytes > max_evidence_bytes:
+            self.add(
+                "ERROR",
+                "RESEARCH_EVIDENCE_STORAGE_BUDGET_EXCEEDED",
+                "research/",
+                "phase-one evidence exceeds max_evidence_bytes; stop new work",
+            )
+        recorded_bytes = current.get("evidence_file_bytes")
+        if isinstance(recorded_bytes, (int, float)) and recorded_bytes != evidence_bytes:
+            self.add(
+                "WARN",
+                "RESEARCH_RESOURCE_EVIDENCE_BYTES_MISMATCH",
+                relative,
+                "recorded evidence_file_bytes does not match current evidence files",
+            )
+
+    def phase_one_evidence_bytes(self) -> int:
+        """Return bytes of committable phase-one evidence, excluding local-only stores."""
+
+        research_root = self.root / "research"
+        if not research_root.is_dir():
+            return 0
+        total = 0
+        for path in research_root.rglob("*"):
+            if not path.is_file() or path.name == "README.md":
+                continue
+            relative_parts = path.relative_to(research_root).parts
+            if relative_parts and relative_parts[0] in {
+                "private",
+                "raw",
+                "source_files",
+            }:
+                continue
+            total += path.stat().st_size
+        return total
 
     def check_phase_one_evidence_quality(
         self,
