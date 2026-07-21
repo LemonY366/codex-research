@@ -45,7 +45,7 @@ uv run python scripts/prepare_dataset.py --input datasets/raw --output datasets/
 
 ## 工作区边界验证
 
-`validate_workspace.py` 是模板预置的只读检查工具，用于检查必需文档、`RESEARCH.md` 中的全局阶段与阶段一子状态、合同字段确认依据、恢复摘要、稳定 ID、研究问题一致性关系、阶段二任务回指、`research/` 中的查询 JSONL、扁平 YAML 证据 schema、交叉引用、敏感字段和质量预警、阶段 TODO 与研究合同体积、仓库级 Skill 的发现路径与基础元数据、按需创建的 registry、运行证据和论文实验 ID 追溯。它不启动 Codex、不读取 `.env`、不创建或修复文件，也不替代 Codex 生成研究内容、核验来源真实性或判断研究设计的科学有效性。
+`validate_workspace.py` 是模板预置的只读检查工具，用于检查必需文档、`RESEARCH.md` 中的全局阶段与阶段一子状态、有序需求获取、候选方向数量与唯一最终方向、合同字段确认依据、恢复摘要、稳定 ID、研究问题一致性关系、阶段二任务回指、`research/` 中的查询 JSONL、扁平 YAML 证据 schema、交叉引用、敏感字段和质量预警、阶段 TODO 与研究合同体积、仓库级 Skill 的发现路径与基础元数据、按需创建的 registry、运行证据和论文实验 ID 追溯。它不启动 Codex、不读取 `.env`、不创建或修复文件，也不替代 Codex 生成研究内容、核验来源真实性、判断候选是否真正创新或判断研究设计的科学有效性。
 
 ```bash
 uv run python scripts/validate_workspace.py

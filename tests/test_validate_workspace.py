@@ -155,15 +155,29 @@ class WorkspaceValidatorTests(unittest.TestCase):
         )
         validator = WorkspaceValidator(self.root)
 
-        validator.check_stage_state()
+        phase, status = validator.check_stage_state()
+        validator.check_research_contract(phase, status)
 
-        self.assertIn("INVALID_PHASE_ONE_STATE", self.codes(validator))
+        codes = self.codes(validator)
+        self.assertIn("INVALID_PHASE_ONE_STATE", codes)
+        self.assertIn("RESEARCH_INTAKE_TABLE_MISSING", codes)
+        self.assertIn("RESEARCH_DIRECTION_TABLE_MISSING", codes)
 
     def test_in_progress_stage_one_can_save_partial_contract(self) -> None:
         template = (REPOSITORY_ROOT / "RESEARCH.md").read_text(encoding="utf-8")
-        partial = template.replace("阶段一子状态：INTAKE", "阶段一子状态：SEARCH")
+        partial = template.replace("阶段一子状态：INTAKE", "阶段一子状态：DIVERGE")
         partial = partial.replace("阶段状态：未开始", "阶段状态：进行中")
         partial = partial.replace("阶段门禁：待检查", "阶段门禁：已通过")
+        intake_values = {
+            "用户研究意图": "探索一个可复现的合成研究方向",
+            "研究对象": "公开合成文本",
+            "核心问题": "比较不同研究路径的可行性",
+            "预期贡献": "形成可验证的研究设计",
+        }
+        for index, (field, value) in enumerate(intake_values.items(), start=1):
+            old = f"| {index} | {field} | TODO | TODO | 待澄清 | TODO | 待分配 |"
+            new = f"| {index} | {field} | {value} | 用户 | 暂定 | 轮次 1 | 待分配 |"
+            partial = partial.replace(old, new)
         self.write_research(partial)
         self.copy_empty_research_evidence()
         validator = WorkspaceValidator(self.root)
@@ -174,6 +188,54 @@ class WorkspaceValidatorTests(unittest.TestCase):
 
         errors = [item for item in validator.findings if item.severity == "ERROR"]
         self.assertEqual([], errors)
+
+    def test_broad_direction_cannot_be_promoted_directly_to_draft(self) -> None:
+        template = (REPOSITORY_ROOT / "RESEARCH.md").read_text(encoding="utf-8")
+        broad_draft = template.replace("阶段一子状态：INTAKE", "阶段一子状态：DRAFT")
+        self.write_research(broad_draft)
+        validator = WorkspaceValidator(self.root)
+
+        validator.check_research_contract("阶段一：调研与设计", "进行中")
+
+        codes = self.codes(validator)
+        self.assertIn("RESEARCH_INTAKE_INCOMPLETE_FOR_DRAFT", codes)
+        self.assertIn("RESEARCH_DIRECTION_CANDIDATES_INSUFFICIENT", codes)
+
+    def test_search_requires_two_compared_candidate_directions(self) -> None:
+        text = self.synthetic_completed_research()
+        validator = WorkspaceValidator(self.root)
+        candidate_tables = [
+            (headers, rows[:1])
+            for headers, rows in validator.parse_markdown_tables(text)
+            if "候选方向 ID" in headers
+        ]
+
+        validator.check_candidate_directions(
+            candidate_tables,
+            "SEARCH",
+            False,
+            {"研究问题 ID": {"RQ-001"}},
+        )
+
+        self.assertIn(
+            "RESEARCH_DIRECTION_CANDIDATES_INSUFFICIENT", self.codes(validator)
+        )
+
+    def test_multiple_final_directions_are_rejected(self) -> None:
+        text = self.synthetic_completed_research().replace(
+            "| 不适用 | 已否决 | 引入不必要的外发、费用和不可控版本风险 |",
+            "| RQ-001 | 已选定 | 引入不必要的外发、费用和不可控版本风险 |",
+        )
+        validator = WorkspaceValidator(self.root)
+
+        validator.check_candidate_directions(
+            validator.parse_markdown_tables(text),
+            "GATE_CHECK",
+            True,
+            {"研究问题 ID": {"RQ-001"}},
+        )
+
+        self.assertIn("RESEARCH_DIRECTION_FINAL_NOT_UNIQUE", self.codes(validator))
 
     def test_empty_evidence_and_absent_registries_are_valid_before_research(self) -> None:
         self.copy_empty_research_evidence()
@@ -372,6 +434,32 @@ class WorkspaceValidatorTests(unittest.TestCase):
 - 未解决问题：无；本轮未保留开放问题。
 - 下一轮首要任务：执行 experiments/TODO.md 中的 exp-001，但本演练不实际运行实验。
 - 不应重新采用的旧方案：真实用户数据、外部 API 和模型训练。
+
+## 阶段一：调研与设计进度
+
+### 需求获取清单
+
+| 顺序 | 需求字段 | 当前摘要或引用 | 信息来源 | 获取状态 | 最近澄清日期或轮次 | 未决问题 ID |
+| --- | --- | --- | --- | --- | --- | --- |
+| 1 | 用户研究意图 | 演练自动化分阶段科研工作流 | 用户 | 已澄清 | 2026-07-21 / 轮次 1 | 不适用 |
+| 2 | 研究对象 | 公开合成短文本规则分类器 | 用户 | 已澄清 | 2026-07-21 / 轮次 1 | 不适用 |
+| 3 | 核心问题 | 规则对文本扰动的分类稳定性 | 用户与 Codex | 已澄清 | 2026-07-21 / 轮次 2 | 不适用 |
+| 4 | 预期贡献 | 可复现的稳定性测量流程 | 用户 | 已澄清 | 2026-07-21 / 轮次 2 | 不适用 |
+| 5 | 成功标准 | SC-001 | 用户 | 已澄清 | 2026-07-21 / 轮次 3 | 不适用 |
+| 6 | 数据条件 | DATA-001，仅使用运行时合成文本 | 用户 | 已澄清 | 2026-07-21 / 轮次 3 | 不适用 |
+| 7 | baseline | BASE-001，固定关键词精确匹配 | 用户与 Codex | 已澄清 | 2026-07-21 / 轮次 4 | 不适用 |
+| 8 | 指标 | METRIC-001，一致率及 bootstrap 区间 | 用户 | 已澄清 | 2026-07-21 / 轮次 4 | 不适用 |
+| 9 | 时间和费用 | 2026-07-31 前完成，零外部费用 | 用户 | 已澄清 | 2026-07-21 / 轮次 5 | 不适用 |
+| 10 | API/GPU | 不使用 API 或 GPU | 用户 | 已澄清 | 2026-07-21 / 轮次 5 | 不适用 |
+| 11 | 数据许可和隐私 | CC0 合成夹具，不含个人信息且不外发 | 用户 | 已澄清 | 2026-07-21 / 轮次 5 | 不适用 |
+| 12 | 范围外事项 | 真实数据、训练、论文与专利 | 用户 | 已澄清 | 2026-07-21 / 轮次 5 | 不适用 |
+
+### 候选方向比较
+
+| 候选方向 ID | 核心问题 | 研究价值 | 创新性风险 | 数据需求 | 计算成本 | 验证难度 | 预计交付物 | 关联研究问题 ID | 状态 | 选择或否决理由 | 决策 ID |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| DIR-001 | 固定规则对合成文本扰动是否稳定 | 提供透明且可复现的工作流演练 | 创新性有限但适合验证模板 | 100 条运行时合成文本 | 本地 CPU，成本低 | 可用确定性脚本直接验证 | 脚本计划、指标和运行记录 | RQ-001 | 已选定 | 无外发和隐私风险，能够完整验证证据链 | DEC-001 |
+| DIR-002 | 外部模型对合成文本扰动是否稳定 | 可比较模型语义鲁棒性 | 容易与既有模型评测重复 | 合成文本及外部模型响应 | 产生 API 调用费用 | 受模型版本和服务波动影响 | API 评测报告 | 不适用 | 已否决 | 引入不必要的外发、费用和不可控版本风险 | DEC-001 |
 
 ## 研究合同字段状态
 

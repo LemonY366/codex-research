@@ -92,7 +92,7 @@ research/
 
 ## `decisions.yaml`
 
-文件顶层包含 `schema_version: 1` 和 `decisions` 列表。只记录会改变研究目标、范围、数据、baseline、指标、预算、授权或阶段状态的持久决策，使用 `DEC-<nnn>`；措辞调整和普通对话不登记。
+文件顶层包含 `schema_version: 1` 和 `decisions` 列表。只记录会改变研究目标、候选方向选择、范围、数据、baseline、指标、预算、授权或阶段状态的持久决策，使用 `DEC-<nnn>`；措辞调整和普通对话不登记。选定最终方向的决策必须把其他 `DIR-<nnn>` 候选及其否决原因分别写入 `alternatives` 和 `rejection_reasons`，不能只记录获选方案。
 
 每个决策必须记录：
 

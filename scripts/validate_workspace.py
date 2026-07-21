@@ -69,6 +69,31 @@ VALID_PHASE_ONE_STATES = {
     "CONFIRM",
     "GATE_CHECK",
 }
+PHASE_ONE_STATE_ORDER = (
+    "INTAKE",
+    "DIVERGE",
+    "SEARCH",
+    "COMPARE",
+    "DRAFT",
+    "CONFIRM",
+    "GATE_CHECK",
+)
+REQUIRED_INTAKE_FIELDS = (
+    "用户研究意图",
+    "研究对象",
+    "核心问题",
+    "预期贡献",
+    "成功标准",
+    "数据条件",
+    "baseline",
+    "指标",
+    "时间和费用",
+    "API/GPU",
+    "数据许可和隐私",
+    "范围外事项",
+)
+VALID_INTAKE_STATUSES = {"已澄清", "暂定", "待澄清", "明确未知", "不适用"}
+VALID_DIRECTION_STATUSES = {"候选", "已选定", "已否决"}
 VALID_CONFIRMATION_STATUSES = {
     "已确认",
     "暂定",
@@ -91,6 +116,7 @@ REQUIRED_CONTRACT_FIELDS = {
 PLACEHOLDER_CELLS = {"", "-", "TODO", "待分配"}
 RESEARCH_ID_DEFINITIONS = (
     ("未决问题 ID", "问题", re.compile(r"OPEN-\d{3}")),
+    ("候选方向 ID", "核心问题", re.compile(r"DIR-\d{3}")),
     ("研究问题 ID", "当前值", re.compile(r"RQ-\d{3}")),
     ("贡献 ID", "当前值", re.compile(r"CONTRIB-\d{3}")),
     ("成功标准 ID", "当前值", re.compile(r"SC-\d{3}")),
@@ -618,6 +644,7 @@ class WorkspaceValidator:
             return
         text = path.read_text(encoding="utf-8")
         tables = self.parse_markdown_tables(text)
+        phase_one_state = self.extract_field(text, "阶段一子状态")
         transition_ready = phase in {
             "阶段二：实验与分析",
             "阶段三：论文写作",
@@ -834,6 +861,7 @@ class WorkspaceValidator:
 
         self.check_research_recovery(text, phase, status, transition_ready)
         self.check_research_contract_quality(text, tables, transition_ready)
+        self.check_requirement_intake(tables, phase_one_state, transition_ready)
 
         definitions: dict[str, set[str]] = {}
         for id_column, signature_column, pattern in RESEARCH_ID_DEFINITIONS:
@@ -866,9 +894,292 @@ class WorkspaceValidator:
                     )
                 seen.add(value)
 
+        self.check_candidate_directions(
+            tables, phase_one_state, transition_ready, definitions
+        )
+
         if transition_ready:
             self.check_contract_relations(tables, definitions)
             self.check_experiment_task_relations(definitions)
+
+    def check_requirement_intake(
+        self,
+        tables: list[tuple[list[str], list[dict[str, str]]]],
+        phase_one_state: str | None,
+        transition_ready: bool,
+    ) -> None:
+        """Validate the ordered twelve-field research-intake protocol."""
+
+        rows = next(
+            (
+                table_rows
+                for headers, table_rows in tables
+                if {"顺序", "需求字段", "获取状态"}.issubset(headers)
+            ),
+            None,
+        )
+        if rows is None:
+            self.add(
+                "ERROR",
+                "RESEARCH_INTAKE_TABLE_MISSING",
+                "RESEARCH.md",
+                "legacy contract must add the ordered twelve-field requirement-intake table",
+            )
+            return
+
+        actual_fields = tuple(row.get("需求字段", "") for row in rows)
+        if actual_fields != REQUIRED_INTAKE_FIELDS:
+            self.add(
+                "ERROR",
+                "RESEARCH_INTAKE_ORDER_INVALID",
+                "RESEARCH.md",
+                "requirement-intake rows must contain the twelve required fields in order",
+            )
+
+        for expected_index, row in enumerate(rows, start=1):
+            if row.get("顺序") != str(expected_index):
+                self.add(
+                    "ERROR",
+                    "RESEARCH_INTAKE_SEQUENCE_INVALID",
+                    "RESEARCH.md",
+                    "requirement-intake sequence numbers must be consecutive from 1 to 12",
+                )
+                break
+            field = row.get("需求字段", "requirement")
+            intake_status = row.get("获取状态", "")
+            if intake_status not in VALID_INTAKE_STATUSES:
+                self.add(
+                    "ERROR",
+                    "RESEARCH_INTAKE_STATUS_INVALID",
+                    "RESEARCH.md",
+                    f"{field} has an unsupported intake status",
+                )
+                continue
+            summary = row.get("当前摘要或引用", "")
+            if intake_status != "待澄清" and (
+                summary in PLACEHOLDER_CELLS or summary.startswith("TODO")
+            ):
+                self.add(
+                    "ERROR",
+                    "RESEARCH_INTAKE_VALUE_MISSING",
+                    "RESEARCH.md",
+                    f"{field} is {intake_status} without a usable summary",
+                )
+            if intake_status == "明确未知" and not re.search(
+                r"OPEN-\d{3}", row.get("未决问题 ID", "")
+            ):
+                self.add(
+                    "ERROR",
+                    "RESEARCH_INTAKE_OPEN_QUESTION_MISSING",
+                    "RESEARCH.md",
+                    f"{field} is explicitly unknown without an OPEN-<nnn>",
+                )
+            if intake_status == "不适用" and not self.has_not_applicable_reason(
+                summary
+            ):
+                self.add(
+                    "ERROR",
+                    "RESEARCH_NOT_APPLICABLE_REASON_MISSING",
+                    "RESEARCH.md",
+                    f"{field} is not applicable but has no explicit reason",
+                )
+
+        if phase_one_state not in VALID_PHASE_ONE_STATES:
+            return
+        state_index = PHASE_ONE_STATE_ORDER.index(phase_one_state)
+        row_by_field = {row.get("需求字段", ""): row for row in rows}
+        if state_index >= PHASE_ONE_STATE_ORDER.index("DIVERGE"):
+            for field in REQUIRED_INTAKE_FIELDS[:4]:
+                if row_by_field.get(field, {}).get("获取状态") == "待澄清":
+                    self.add(
+                        "ERROR",
+                        "RESEARCH_INTAKE_CORE_UNRESOLVED",
+                        "RESEARCH.md",
+                        f"{field} must be clarified before DIVERGE",
+                    )
+        if state_index >= PHASE_ONE_STATE_ORDER.index("SEARCH"):
+            pending = [
+                field
+                for field in REQUIRED_INTAKE_FIELDS
+                if row_by_field.get(field, {}).get("获取状态") == "待澄清"
+            ]
+            if pending:
+                self.add(
+                    "ERROR",
+                    "RESEARCH_INTAKE_INCOMPLETE_FOR_SEARCH",
+                    "RESEARCH.md",
+                    f"all intake fields must be addressed before SEARCH: {', '.join(pending)}",
+                )
+        if state_index >= PHASE_ONE_STATE_ORDER.index("DRAFT") or transition_ready:
+            unresolved = [
+                field
+                for field in REQUIRED_INTAKE_FIELDS
+                if row_by_field.get(field, {}).get("获取状态")
+                not in {"已澄清", "不适用"}
+            ]
+            if unresolved:
+                self.add(
+                    "ERROR",
+                    "RESEARCH_INTAKE_INCOMPLETE_FOR_DRAFT",
+                    "RESEARCH.md",
+                    f"final contract cannot be drafted from unresolved intake fields: {', '.join(unresolved)}",
+                )
+
+    def check_candidate_directions(
+        self,
+        tables: list[tuple[list[str], list[dict[str, str]]]],
+        phase_one_state: str | None,
+        transition_ready: bool,
+        definitions: dict[str, set[str]],
+    ) -> None:
+        """Require multiple compared candidates and one final direction."""
+
+        required_columns = {
+            "候选方向 ID",
+            "核心问题",
+            "研究价值",
+            "创新性风险",
+            "数据需求",
+            "计算成本",
+            "验证难度",
+            "预计交付物",
+            "关联研究问题 ID",
+            "状态",
+            "选择或否决理由",
+            "决策 ID",
+        }
+        rows = next(
+            (
+                table_rows
+                for headers, table_rows in tables
+                if required_columns.issubset(headers)
+            ),
+            None,
+        )
+        if rows is None:
+            self.add(
+                "ERROR",
+                "RESEARCH_DIRECTION_TABLE_MISSING",
+                "RESEARCH.md",
+                "legacy contract must add the multi-candidate direction comparison table",
+            )
+            return
+
+        real_rows = [
+            row
+            for row in rows
+            if re.fullmatch(r"DIR-\d{3}", row.get("候选方向 ID", ""))
+        ]
+        for row in real_rows:
+            direction_id = row.get("候选方向 ID", "direction")
+            direction_status = row.get("状态", "")
+            if direction_status not in VALID_DIRECTION_STATUSES:
+                self.add(
+                    "ERROR",
+                    "RESEARCH_DIRECTION_STATUS_INVALID",
+                    "RESEARCH.md",
+                    f"{direction_id} has an unsupported direction status",
+                )
+
+        if phase_one_state not in VALID_PHASE_ONE_STATES:
+            return
+        state_index = PHASE_ONE_STATE_ORDER.index(phase_one_state)
+        comparison_required = (
+            state_index >= PHASE_ONE_STATE_ORDER.index("SEARCH")
+            or transition_ready
+        )
+        if not comparison_required:
+            return
+        if len(real_rows) < 2:
+            self.add(
+                "ERROR",
+                "RESEARCH_DIRECTION_CANDIDATES_INSUFFICIENT",
+                "RESEARCH.md",
+                "at least two substantively different candidate directions are required before SEARCH",
+            )
+
+        comparison_columns = (
+            "核心问题",
+            "研究价值",
+            "创新性风险",
+            "数据需求",
+            "计算成本",
+            "验证难度",
+            "预计交付物",
+        )
+        signatures: set[tuple[str, ...]] = set()
+        for row in real_rows:
+            direction_id = row.get("候选方向 ID", "direction")
+            missing = [
+                column
+                for column in comparison_columns
+                if row.get(column, "") in PLACEHOLDER_CELLS
+                or row.get(column, "").startswith("TODO")
+            ]
+            if missing:
+                self.add(
+                    "ERROR",
+                    "RESEARCH_DIRECTION_COMPARISON_INCOMPLETE",
+                    "RESEARCH.md",
+                    f"{direction_id} is missing comparison fields: {', '.join(missing)}",
+                )
+            signature = tuple(row.get(column, "").strip() for column in comparison_columns)
+            if signature in signatures:
+                self.add(
+                    "ERROR",
+                    "RESEARCH_DIRECTION_NOT_SUBSTANTIVELY_DIFFERENT",
+                    "RESEARCH.md",
+                    f"{direction_id} duplicates another candidate across all comparison dimensions",
+                )
+            signatures.add(signature)
+
+        final_selection_required = (
+            state_index >= PHASE_ONE_STATE_ORDER.index("DRAFT")
+            or transition_ready
+        )
+        if not final_selection_required:
+            return
+        selected = [row for row in real_rows if row.get("状态") == "已选定"]
+        if len(selected) != 1:
+            self.add(
+                "ERROR",
+                "RESEARCH_DIRECTION_FINAL_NOT_UNIQUE",
+                "RESEARCH.md",
+                "exactly one candidate direction must be selected before DRAFT and stage two",
+            )
+        for row in real_rows:
+            direction_id = row.get("候选方向 ID", "direction")
+            if row.get("状态") not in {"已选定", "已否决"}:
+                self.add(
+                    "ERROR",
+                    "RESEARCH_DIRECTION_UNRESOLVED",
+                    "RESEARCH.md",
+                    f"{direction_id} remains a candidate after final direction selection",
+                )
+            reason = row.get("选择或否决理由", "")
+            if reason in PLACEHOLDER_CELLS or reason.startswith("TODO"):
+                self.add(
+                    "ERROR",
+                    "RESEARCH_DIRECTION_REASON_MISSING",
+                    "RESEARCH.md",
+                    f"{direction_id} has no selection or rejection reason",
+                )
+            if not re.search(r"DEC-\d{3}", row.get("决策 ID", "")):
+                self.add(
+                    "ERROR",
+                    "RESEARCH_DIRECTION_DECISION_MISSING",
+                    "RESEARCH.md",
+                    f"{direction_id} has no DEC-<nnn> decision reference",
+                )
+        if selected:
+            rq_id = selected[0].get("关联研究问题 ID", "")
+            if rq_id not in definitions.get("研究问题 ID", set()):
+                self.add(
+                    "ERROR",
+                    "RESEARCH_DIRECTION_QUESTION_MISSING",
+                    "RESEARCH.md",
+                    "the selected direction must reference a defined research question",
+                )
 
     @staticmethod
     def has_not_applicable_reason(value: str) -> bool:
@@ -1838,6 +2149,17 @@ class WorkspaceValidator:
                     "RESEARCH_DECISION_FIELD_INVALID",
                     relative,
                     f"{decision_id} references unknown contract field {field}",
+                )
+            if (
+                transition_ready
+                and affected_fields.intersection({"研究目标", "研究问题"})
+                and not alternatives
+            ):
+                self.add(
+                    "ERROR",
+                    "RESEARCH_DIRECTION_DECISION_ALTERNATIVES_MISSING",
+                    relative,
+                    f"{decision_id} selects a research direction without recorded alternatives and rejection reasons",
                 )
             self.require_boolean_fields(
                 relative,
