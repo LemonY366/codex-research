@@ -18,6 +18,8 @@ scripts/
 ├── validate_dataset.py
 ├── build_splits.py
 ├── check_environment.py
+├── transition_workflow.py
+├── manage_task_progress.py
 └── export_results.py
 ```
 
@@ -45,7 +47,7 @@ uv run python scripts/prepare_dataset.py --input datasets/raw --output datasets/
 
 ## 工作区边界验证
 
-`validate_workspace.py` 是模板预置的只读检查工具，用于检查必需文档、`RESEARCH.md` 中的全局阶段与阶段一子状态、有序需求获取、候选方向数量与唯一最终方向、合同字段确认依据、恢复摘要、稳定 ID、研究问题一致性关系、阶段二任务回指，以及 `research/` 中的活动/归档查询 JSONL、候选方向八类搜索覆盖、停止代理指标、来源质量和独立性、引用支持与冲突字段、资源预算/累计快照、扁平 YAML 证据 schema、交叉引用、敏感字段和体积预警。它还检查阶段 TODO、仓库级 Skill 元数据、按需创建的 registry、运行证据和论文实验 ID 追溯。它不启动 Codex、不读取 `.env`、不创建或修复文件，也不替代 Codex 生成研究内容、核验来源真实性、判断候选是否真正创新或判断研究设计的科学有效性。
+`validate_workspace.py` 是模板预置的只读检查工具，用于交叉检查机器状态、转换账本和 `RESEARCH.md` 投影，并检查渐进式需求获取、Codex 主导头脑风暴与用户结束发散、候选方向数量与唯一最终方向、合同字段确认依据、数据证据成熟度、恢复摘要、稳定 ID、研究问题一致性关系、阶段二任务回指，以及 `research/` 证据。阶段一没有固定资源配额或研究周期。工具还检查阶段 TODO、registry 与本地运行对账、运行可复现字段、阶段二/三任务进度与心跳、证据交接和论文实验 ID 追溯；它不启动 Codex、不读取 `.env`、不创建或修复文件，也不替代来源真实性和科研有效性判断。
 
 ```bash
 uv run python scripts/validate_workspace.py
@@ -53,4 +55,10 @@ uv run python scripts/validate_workspace.py --strict
 python3 -m unittest discover -s tests -v
 ```
 
-常规模式在发现错误时返回非零状态；`--strict` 也将警告视为失败。`tests/` 使用 Python 标准库 `unittest` 覆盖阶段一合同、门禁、搜索覆盖、来源质量、引用与冲突、预算/体积、安全、迁移及临时工作区端到端演练；合成证据不会写入正式 `research/`。质量预警、个人信息模式和凭据检查是启发式检查，不能代替科研合理性评审、来源事实核验、人工隐私审查或专用密钥扫描器。运行证据的覆盖检查可识别 Git 已跟踪文件的改写；默认忽略、未建立外部校验基线的本地运行无法仅凭当前文件状态证明从未被修改。
+常规模式在发现错误时返回非零状态；`--strict` 也将警告视为失败。`tests/` 使用 Python 标准库 `unittest` 覆盖阶段一合同、头脑风暴、连续切换、门禁、搜索覆盖、来源质量、引用与冲突、资源计量、安全、迁移及临时工作区端到端演练；合成证据不会写入正式 `research/`。质量预警、个人信息模式和凭据检查是启发式检查，不能代替科研合理性评审、来源事实核验、人工隐私审查或专用密钥扫描器。运行证据的覆盖检查可识别 Git 已跟踪文件的改写；默认忽略、未建立外部校验基线的本地运行无法仅凭当前文件状态证明从未被修改。
+
+## 工作流与进度工具
+
+`transition_workflow.py` 是阶段和阶段一子状态的唯一写入入口。它先运行当前及目标状态门禁，再用锁、事务日志和原子替换同步机器状态、转换账本及 `RESEARCH.md` 投影；校验失败时不改变状态。
+
+`manage_task_progress.py` 创建、更新、查看和归档阶段二/三任务的结构化进度。实验任务写入 `workflow/tasks/`，写作会话写入 `paper/sessions/`；`list --stage stage_two|stage_three` 供 Codex 周期轮询。该工具不读取或改写两个阶段的 `TODO.md`，TODO 继续按原有任务管理方式维护。两个工具均只使用 Python 标准库。

@@ -8,10 +8,12 @@ import shutil
 import subprocess
 import tempfile
 import unittest
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest import mock
 
 from scripts.validate_workspace import REQUIRED_SEARCH_CATEGORIES, WorkspaceValidator
+from src.runtime.progress import TaskProgress
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
@@ -48,6 +50,7 @@ class WorkspaceValidatorTests(unittest.TestCase):
 
         errors = [item for item in validator.findings if item.severity == "ERROR"]
         self.assertEqual([], errors)
+        self.assertNotIn("RESEARCH_SEARCH_LOG_EMPTY", self.codes(validator))
 
     def test_pending_field_blocks_stage_transition(self) -> None:
         template = (REPOSITORY_ROOT / "RESEARCH.md").read_text(encoding="utf-8")
@@ -161,14 +164,15 @@ class WorkspaceValidatorTests(unittest.TestCase):
         partial = partial.replace("阶段门禁：待检查", "阶段门禁：已通过")
         intake_values = {
             "用户研究意图": "探索一个可复现的合成研究方向",
-            "研究对象": "公开合成文本",
-            "核心问题": "比较不同研究路径的可行性",
-            "预期贡献": "形成可验证的研究设计",
         }
         for index, (field, value) in enumerate(intake_values.items(), start=1):
             old = f"| {index} | {field} | TODO | TODO | 待澄清 | TODO | 待分配 |"
             new = f"| {index} | {field} | {value} | 用户 | 暂定 | 轮次 1 | 待分配 |"
             partial = partial.replace(old, new)
+        partial = partial.replace(
+            "| 待分配 | TODO | TODO | TODO | TODO | TODO | 待分配 |",
+            "| TRANS-001 | 2026-07-22 | INTAKE | DIVERGE | 已通过 | 用户提供研究种子 | DEC-001 |",
+        )
         self.write_research(partial)
         self.copy_empty_research_evidence()
         validator = WorkspaceValidator(self.root)
@@ -210,6 +214,98 @@ class WorkspaceValidatorTests(unittest.TestCase):
 
         self.assertIn(
             "RESEARCH_DIRECTION_CANDIDATES_INSUFFICIENT", self.codes(validator)
+        )
+
+    def test_search_allows_data_and_resource_intake_to_remain_pending(self) -> None:
+        template = (REPOSITORY_ROOT / "RESEARCH.md").read_text(encoding="utf-8")
+        for index, field in enumerate(
+            ("用户研究意图", "研究对象", "核心问题", "预期贡献"), start=1
+        ):
+            template = template.replace(
+                f"| {index} | {field} | TODO | TODO | 待澄清 | TODO | 待分配 |",
+                f"| {index} | {field} | 可工作的方向信息 | 用户 | 暂定 | 轮次 1 | 待分配 |",
+            )
+        validator = WorkspaceValidator(self.root)
+        validator.check_requirement_intake(
+            validator.parse_markdown_tables(template), "SEARCH", False
+        )
+
+        self.assertNotIn(
+            "RESEARCH_INTAKE_INCOMPLETE_FOR_SEARCH", self.codes(validator)
+        )
+
+    def test_search_requires_brainstorm_record_and_user_exit(self) -> None:
+        template = (REPOSITORY_ROOT / "RESEARCH.md").read_text(encoding="utf-8")
+        validator = WorkspaceValidator(self.root)
+        tables = validator.parse_markdown_tables(template)
+
+        validator.check_brainstorm(tables, template, "SEARCH", False)
+
+        codes = self.codes(validator)
+        self.assertIn("RESEARCH_BRAINSTORM_RECORD_MISSING", codes)
+        self.assertIn("RESEARCH_BRAINSTORM_USER_EXIT_MISSING", codes)
+
+    def test_transition_history_rejects_skipped_state(self) -> None:
+        validator = WorkspaceValidator(self.root)
+        headers = [
+            "切换 ID",
+            "日期",
+            "原阶段",
+            "新阶段",
+            "门禁结果",
+            "原因或授权",
+            "决策 ID",
+        ]
+        rows = [
+            {
+                "切换 ID": "TRANS-001",
+                "日期": "2026-07-23",
+                "原阶段": "INTAKE",
+                "新阶段": "SEARCH",
+                "门禁结果": "已通过",
+                "原因或授权": "错误地跳过头脑风暴",
+                "决策 ID": "DEC-001",
+            }
+        ]
+
+        validator.check_transition_history(
+            [(headers, rows)], "阶段一：调研与设计", "SEARCH", "进行中", False
+        )
+
+        self.assertIn("RESEARCH_TRANSITION_STEP_SKIPPED", self.codes(validator))
+
+    def test_confirmed_data_rejects_immature_claim_evidence(self) -> None:
+        validator = WorkspaceValidator(self.root)
+        headers = [
+            "数据 ID",
+            "当前值",
+            "来源、版本与许可证",
+            "信息来源",
+            "确认状态",
+            "最近确认日期或轮次",
+            "决策 ID",
+            "证据 ID",
+        ]
+        rows = [
+            {
+                "数据 ID": "DATA-001",
+                "当前值": "候选数据",
+                "来源、版本与许可证": "许可仍待核验",
+                "信息来源": "用户偏好",
+                "确认状态": "已确认",
+                "最近确认日期或轮次": "2026-07-23",
+                "决策 ID": "DEC-001",
+                "证据 ID": "CLM-001",
+            }
+        ]
+
+        validator.check_confirmed_data_evidence(
+            [(headers, rows)], {"CLM-001"}, set()
+        )
+
+        self.assertIn(
+            "RESEARCH_DATA_CONFIRMATION_EVIDENCE_IMMATURE",
+            self.codes(validator),
         )
 
     def test_multiple_final_directions_are_rejected(self) -> None:
@@ -343,7 +439,7 @@ class WorkspaceValidatorTests(unittest.TestCase):
         self.assertIn("RESEARCH_CLAIM_CONFLICT_DETAIL_MISSING", codes)
         self.assertIn("RESEARCH_CLAIM_ADVERSE_EVIDENCE_NOT_RETAINED", codes)
 
-    def test_resource_budget_excess_and_unexplained_null_are_rejected(self) -> None:
+    def test_resource_quota_is_ignored_but_unexplained_null_is_rejected(self) -> None:
         validator = WorkspaceValidator(self.root)
         resource = self.valid_resource(
             max_search_queries=2,
@@ -355,10 +451,10 @@ class WorkspaceValidatorTests(unittest.TestCase):
         validator.validate_phase_one_resources([resource], [], [], True)
 
         codes = self.codes(validator)
-        self.assertIn("RESEARCH_RESOURCE_BUDGET_EXCEEDED", codes)
+        self.assertNotIn("RESEARCH_RESOURCE_BUDGET_EXCEEDED", codes)
         self.assertIn("RESEARCH_RESOURCE_NULL_REASON_MISSING", codes)
 
-    def test_summary_size_uses_current_phase_one_budget(self) -> None:
+    def test_summary_size_is_not_a_phase_one_quota(self) -> None:
         summaries = self.root / "research/summaries"
         summaries.mkdir(parents=True)
         (summaries / "RQ-001.md").write_text("123456", encoding="utf-8")
@@ -368,7 +464,7 @@ class WorkspaceValidatorTests(unittest.TestCase):
             [self.valid_resource(max_summary_chars=5)], [], [], True
         )
 
-        self.assertIn("RESEARCH_SUMMARY_SIZE_EXCEEDED", self.codes(validator))
+        self.assertNotIn("RESEARCH_SUMMARY_SIZE_EXCEEDED", self.codes(validator))
 
     def test_search_log_emits_rotation_warning_at_threshold(self) -> None:
         research = self.root / "research"
@@ -541,6 +637,7 @@ class WorkspaceValidatorTests(unittest.TestCase):
         (project_root / "experiments/TODO.md").write_text(
             self.synthetic_experiment_todo(), encoding="utf-8"
         )
+        self.write_synthetic_workflow_state(project_root)
         self.write_synthetic_evidence(project_root)
         self.initialize_git_repository(project_root)
 
@@ -554,6 +651,245 @@ class WorkspaceValidatorTests(unittest.TestCase):
         self.assertFalse(any(project_root.glob("*/registry.yaml")))
         self.assertFalse(
             any(path.is_dir() for path in (project_root / "experiments/runs").iterdir())
+        )
+
+    def test_task_progress_lifecycle_is_observable_and_valid(self) -> None:
+        (self.root / "experiments").mkdir()
+        (self.root / "paper").mkdir()
+        experiment_todo = self.root / "experiments/TODO.md"
+        paper_todo = self.root / "paper/TODO.md"
+        experiment_todo.write_text("experiment sentinel\n", encoding="utf-8")
+        paper_todo.write_text("paper sentinel\n", encoding="utf-8")
+        task_dir = self.root / "workflow/tasks/task-run-001"
+        progress = TaskProgress(task_dir)
+
+        progress.start(
+            task_run_id="task-run-001",
+            stage="stage_two",
+            task_kind="training",
+            label="synthetic seed 1337",
+            step="queued",
+            total=2,
+            unit="epoch",
+        )
+        progress.update(
+            status_name="running",
+            step="epoch 1",
+            completed=1,
+            message="first epoch complete",
+            resource_updates={"gpu_seconds": 10.0},
+        )
+        progress.update(
+            status_name="success",
+            step="evaluation complete",
+            completed=2,
+            message="task complete",
+            outputs=["experiments/runs/run-synthetic"],
+        )
+        validator = WorkspaceValidator(self.root)
+
+        validator.check_task_progress()
+
+        self.assertEqual([], validator.findings)
+        self.assertEqual(3, len((task_dir / "events.jsonl").read_text().splitlines()))
+        self.assertEqual("experiment sentinel\n", experiment_todo.read_text(encoding="utf-8"))
+        self.assertEqual("paper sentinel\n", paper_todo.read_text(encoding="utf-8"))
+
+    def test_stale_running_task_heartbeat_is_reported(self) -> None:
+        task_dir = self.root / "paper/sessions/write-001"
+        progress = TaskProgress(task_dir)
+        progress.start(
+            task_run_id="write-001",
+            stage="stage_three",
+            task_kind="drafting",
+            label="methods section",
+            step="outline",
+        )
+        progress.update(status_name="running", step="drafting")
+        heartbeat = json.loads((task_dir / "heartbeat.json").read_text())
+        heartbeat["heartbeat_at"] = (
+            datetime.now(timezone.utc) - timedelta(minutes=3)
+        ).isoformat()
+        (task_dir / "heartbeat.json").write_text(json.dumps(heartbeat), encoding="utf-8")
+        validator = WorkspaceValidator(self.root)
+
+        validator.check_task_progress()
+
+        self.assertIn("TASK_HEARTBEAT_STALE", self.codes(validator))
+
+    def test_stage_three_requires_stage_two_evidence_handoff(self) -> None:
+        validator = WorkspaceValidator(self.root)
+
+        validator.check_stage_two_handoff(required=True)
+
+        self.assertIn("STAGE_TWO_HANDOFF_MISSING", self.codes(validator))
+
+    def test_machine_state_rejects_manual_markdown_advance(self) -> None:
+        shutil.copytree(REPOSITORY_ROOT / "workflow", self.root / "workflow")
+        research = (REPOSITORY_ROOT / "RESEARCH.md").read_text(encoding="utf-8")
+        self.write_research(
+            research.replace("阶段一子状态：INTAKE", "阶段一子状态：DIVERGE")
+        )
+        validator = WorkspaceValidator(self.root)
+
+        validator.check_machine_workflow_state()
+
+        self.assertIn("WORKFLOW_STATE_PROJECTION_MISMATCH", self.codes(validator))
+
+    def test_valid_stage_two_handoff_resolves_local_success_run(self) -> None:
+        run_dir = self.root / "experiments/runs/run-001"
+        run_dir.mkdir(parents=True)
+        (run_dir / "metadata.json").write_text(
+            json.dumps({"experiment_id": "exp-001", "status": "success"}),
+            encoding="utf-8",
+        )
+        (self.root / "experiments/evidence_handoff.yaml").write_text(
+            """schema_version: 1
+handoffs:
+  - handoff_id: "HANDOFF-001"
+    research_question_ids: ["RQ-001"]
+    success_criterion_ids: ["SC-001"]
+    experiment_ids: ["exp-001"]
+    run_ids: ["run-001"]
+    supported_claims: ["The synthetic run completed."]
+    unsupported_claims: []
+    negative_results: []
+    limitations: ["Synthetic fixture only."]
+    local_evidence_verified: true
+    registry_reconciled: true
+    completed_at: "2026-07-23T00:00:00+00:00"
+""",
+            encoding="utf-8",
+        )
+        validator = WorkspaceValidator(self.root)
+
+        validator.check_stage_two_handoff(required=True)
+
+        self.assertEqual([], validator.findings)
+
+    def test_success_run_requires_reproducibility_metadata(self) -> None:
+        run_dir = self.root / "experiments/runs/run-001"
+        run_dir.mkdir(parents=True)
+        for filename in (
+            "command.txt",
+            "environment.json",
+            "script_path.txt",
+            "run.log",
+            "events.jsonl",
+        ):
+            (run_dir / filename).write_text("synthetic\n", encoding="utf-8")
+        for filename in ("config_snapshot.json", "metrics.json", "status.json", "heartbeat.json"):
+            (run_dir / filename).write_text("{}\n", encoding="utf-8")
+        (run_dir / "metadata.json").write_text(
+            json.dumps(
+                {
+                    "experiment_id": "exp-001",
+                    "status": "success",
+                    "resources": {
+                        "gpu": {"enabled": False},
+                        "api": {"enabled": False},
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+        validator = WorkspaceValidator(self.root)
+
+        validator.check_run_records()
+
+        codes = self.codes(validator)
+        self.assertIn("RUN_DATA_VERSION_MISSING", codes)
+        self.assertIn("RUN_RANDOM_SEED_MISSING", codes)
+
+    def test_experiment_registry_and_local_runs_are_reconciled(self) -> None:
+        run_dir = self.root / "experiments/runs/run-001"
+        run_dir.mkdir(parents=True)
+        (run_dir / "metadata.json").write_text(
+            json.dumps({"experiment_id": "exp-001", "status": "success"}),
+            encoding="utf-8",
+        )
+        (self.root / "experiments/registry.yaml").write_text(
+            """schema_version: 1
+experiments:
+  - experiment_id: "exp-001"
+    status: "completed"
+    script: "experiments/scripts/exp-001-synthetic.py"
+    runs: ["run-001"]
+    research_question_ids: ["RQ-001"]
+    success_criterion_ids: ["SC-001"]
+    decision_ids: ["DEC-001"]
+""",
+            encoding="utf-8",
+        )
+        validator = WorkspaceValidator(self.root)
+
+        validator.check_experiment_reconciliation()
+
+        self.assertEqual([], validator.findings)
+
+    def test_unregistered_local_run_is_rejected(self) -> None:
+        run_dir = self.root / "experiments/runs/run-001"
+        run_dir.mkdir(parents=True)
+        (run_dir / "metadata.json").write_text(
+            json.dumps({"experiment_id": "exp-001", "status": "failed"}),
+            encoding="utf-8",
+        )
+        (self.root / "experiments/registry.yaml").write_text(
+            """schema_version: 1
+experiments:
+  - experiment_id: "exp-001"
+    status: "planned"
+    script: "experiments/scripts/exp-001-synthetic.py"
+    runs: []
+    research_question_ids: ["RQ-001"]
+    success_criterion_ids: ["SC-001"]
+    decision_ids: ["DEC-001"]
+""",
+            encoding="utf-8",
+        )
+        validator = WorkspaceValidator(self.root)
+
+        validator.check_experiment_reconciliation()
+
+        self.assertIn("EXPERIMENT_RUN_UNREGISTERED", self.codes(validator))
+
+    @staticmethod
+    def write_synthetic_workflow_state(project_root: Path) -> None:
+        """Synchronize machine state with the completed synthetic contract."""
+
+        nodes = ("INTAKE", "DIVERGE", "SEARCH", "COMPARE", "DRAFT", "CONFIRM", "GATE_CHECK")
+        events = []
+        for revision, (source, target) in enumerate(zip(nodes, nodes[1:]), start=1):
+            events.append(
+                {
+                    "schema_version": 1,
+                    "transition_id": f"TRANS-{revision:03d}",
+                    "revision": revision,
+                    "from_node": source,
+                    "to_node": target,
+                }
+            )
+        workflow = project_root / "workflow"
+        (workflow / "state.json").write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "revision": 6,
+                    "current_phase": "阶段一：调研与设计",
+                    "phase_one_substate": "GATE_CHECK",
+                    "phase_status": "已完成",
+                    "gate_result": "已通过",
+                    "last_transition_id": "TRANS-006",
+                    "updated_at": "2026-07-21T00:00:00+00:00",
+                },
+                ensure_ascii=False,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        (workflow / "transitions.jsonl").write_text(
+            "".join(json.dumps(event) + "\n" for event in events),
+            encoding="utf-8",
         )
 
     def copy_empty_research_evidence(self) -> None:
@@ -582,7 +918,7 @@ class WorkspaceValidatorTests(unittest.TestCase):
             ("数据、baseline 与评测", "DATA-001 / BASE-001 / METRIC-001"),
             ("数据与隐私边界", "仅使用公开合成文本，不含个人信息且禁止外发"),
             ("计算与外部服务", "仅使用本地 CPU"),
-            ("约束与预算", "零 API 调用、零 GPU 时间、2026-07-31 前完成"),
+            ("阶段二执行约束与资源方案", "零 API 调用、零 GPU 时间"),
             ("Skills、依赖与授权", "不适用：使用 Python 标准库且无外部服务"),
             ("范围外事项", "不训练模型、不处理真实用户数据、不撰写论文"),
         )
@@ -607,6 +943,13 @@ class WorkspaceValidatorTests(unittest.TestCase):
 ## 会话恢复摘要
 
 - 最近交接日期或轮次：2026-07-21 / 演练轮次 7。
+- 当前全局阶段：阶段一：调研与设计。
+- 当前阶段一子状态：GATE_CHECK。
+- 当前候选方向：DIR-001、DIR-002。
+- 当前唯一选定方向：DIR-001。
+- 头脑风暴状态：已结束。
+- 最新趋同判断：趋同；新回答未形成新的实质方向。
+- 用户是否还有更多想法：暂无；进入搜索。
 - 本轮已确认事项：DEC-001，确认 RQ-001、DATA-001、BASE-001、METRIC-001 与 SC-001。
 - 本轮否决方案：拒绝使用真实个人数据和外部模型 API。
 - 当前暂定假设：无；合同字段均已明确确认。
@@ -629,10 +972,18 @@ class WorkspaceValidatorTests(unittest.TestCase):
 | 6 | 数据条件 | DATA-001，仅使用运行时合成文本 | 用户 | 已澄清 | 2026-07-21 / 轮次 3 | 不适用 |
 | 7 | baseline | BASE-001，固定关键词精确匹配 | 用户与 Codex | 已澄清 | 2026-07-21 / 轮次 4 | 不适用 |
 | 8 | 指标 | METRIC-001，一致率及 bootstrap 区间 | 用户 | 已澄清 | 2026-07-21 / 轮次 4 | 不适用 |
-| 9 | 时间和费用 | 2026-07-31 前完成，零外部费用 | 用户 | 已澄清 | 2026-07-21 / 轮次 5 | 不适用 |
-| 10 | API/GPU | 不使用 API 或 GPU | 用户 | 已澄清 | 2026-07-21 / 轮次 5 | 不适用 |
-| 11 | 数据许可和隐私 | CC0 合成夹具，不含个人信息且不外发 | 用户 | 已澄清 | 2026-07-21 / 轮次 5 | 不适用 |
-| 12 | 范围外事项 | 真实数据、训练、论文与专利 | 用户 | 已澄清 | 2026-07-21 / 轮次 5 | 不适用 |
+| 9 | API/GPU | 不使用 API 或 GPU | 用户 | 已澄清 | 2026-07-21 / 轮次 5 | 不适用 |
+| 10 | 数据许可和隐私 | CC0 合成夹具，不含个人信息且不外发 | 用户 | 已澄清 | 2026-07-21 / 轮次 5 | 不适用 |
+| 11 | 范围外事项 | 真实数据、训练、论文与专利 | 用户 | 已澄清 | 2026-07-21 / 轮次 5 | 不适用 |
+
+### 头脑风暴记录
+
+| 轮次 | Codex 主动问题焦点 | 用户回答摘要 | 新增差异维度 | 关联候选方向 | 趋同判断 |
+| --- | --- | --- | --- | --- | --- |
+| 1 | 更重视透明规则还是外部模型能力 | 用户优先透明且本地的规则评测 | 方法机制、验证方式 | DIR-001、DIR-002 | 有新差异 |
+| 2 | 是否还有不同的研究对象或贡献形式 | 暂时没有，已有方向足够比较 | 无 | DIR-001、DIR-002 | 趋同 |
+
+- 发散结论：用户表示暂时没有更多想法，进入 SEARCH。
 
 ### 候选方向比较
 
@@ -721,26 +1072,16 @@ class WorkspaceValidatorTests(unittest.TestCase):
 - API 模型：不适用：不调用外部服务。
 - API 与 GPU 分工及数据流：不适用：数据保持本地。
 
-## 约束与预算
+## 阶段二执行约束与资源方案
 
 - 最大 GPU 时间：不适用：不使用 GPU。
 - 最大 API 调用次数：0 次。
 - 最大外部 API 预算：0 元。
-- 截止日期：2026-07-31。
+- 阶段二失败停止规则：任何预检失败均停止，不生成运行证据。
 
-### 阶段一调研预算摘要
+### 阶段一资源记录说明
 
-- 最大搜索查询数：10 次。
-- 最大搜索页面数：20 页。
-- 最大外部工具调用数：0 次。
-- 阶段一最大 API 调用数：0 次。
-- 阶段一最大费用：0 CNY。
-- 单个来源最大抽取字符数：2000 字符。
-- 单份调研摘要最大字符数：4000 字符。
-- `RESEARCH.md` 最大建议行数：1000 行。
-- `RESEARCH.md` 最大建议字节数：200000 字节。
-- 阶段一证据总存储上限：1000000 字节。
-- 达到预算后的停止行为：停止对应新增工作，保留证据并向用户披露未覆盖范围。
+阶段一只记录实际用量，不设置查询、页面、调用、费用、时间或存储上限。
 
 ## Skills 与辅助工具
 
@@ -768,6 +1109,17 @@ class WorkspaceValidatorTests(unittest.TestCase):
 | 决策 ID | 日期 | 决策 | 理由摘要 | 影响字段 | 用户确认状态 | 证据 ID |
 | --- | --- | --- | --- | --- | --- | --- |
 | DEC-001 | 2026-07-21 | 采用本地、公开、合成的规则分类稳定性方向 | 可完整演练证据链且无隐私、费用和外发风险 | 研究合同全部字段 | 已确认 | CLM-001 |
+
+## 阶段切换记录
+
+| 切换 ID | 日期 | 原阶段 | 新阶段 | 门禁结果 | 原因或授权 | 决策 ID |
+| --- | --- | --- | --- | --- | --- | --- |
+| TRANS-001 | 2026-07-21 | INTAKE | DIVERGE | 已通过 | 用户提供研究种子 | DEC-001 |
+| TRANS-002 | 2026-07-21 | DIVERGE | SEARCH | 已通过 | 用户结束发散并保留两个候选 | DEC-001 |
+| TRANS-003 | 2026-07-21 | SEARCH | COMPARE | 已通过 | 八类覆盖与停止代理满足 | DEC-001 |
+| TRANS-004 | 2026-07-21 | COMPARE | DRAFT | 已通过 | 用户选择唯一方向 | DEC-001 |
+| TRANS-005 | 2026-07-21 | DRAFT | CONFIRM | 已通过 | 合同草案完整 | DEC-001 |
+| TRANS-006 | 2026-07-21 | CONFIRM | GATE_CHECK | 已通过 | 字段逐项确认完成 | DEC-001 |
 """
 
     @staticmethod
@@ -974,18 +1326,6 @@ snapshots:
   - resource_id: "RES-001"
     recorded_at: "2026-07-22T10:15:00+08:00"
     status: "当前"
-    max_search_queries: 10
-    max_pages: 20
-    max_external_tool_calls: 0
-    max_api_calls: 0
-    max_cost: 0
-    cost_currency: "CNY"
-    max_source_extract_chars: 2000
-    max_summary_chars: 4000
-    max_research_lines: 1000
-    max_research_bytes: 200000
-    max_evidence_bytes: 1000000
-    stop_behavior: "达到任一上限时停止对应新增工作并报告未覆盖范围"
     input_tokens: null
     output_tokens: null
     search_return_size: 400
@@ -996,6 +1336,7 @@ snapshots:
     api_calls: 0
     elapsed_seconds: 900
     estimated_cost: 0
+    cost_currency: "CNY"
     evidence_file_bytes: {evidence_bytes}
     claim_count: 1
     context_compactions: 0
@@ -1018,7 +1359,7 @@ snapshots:
             "数据、baseline 与评测",
             "数据与隐私边界",
             "计算与外部服务",
-            "约束与预算",
+            "阶段二执行约束与资源方案",
             "Skills、依赖与授权",
             "范围外事项",
         ]
@@ -1177,18 +1518,6 @@ decisions:
             "resource_id": "RES-001",
             "recorded_at": "2026-07-22T10:15:00+08:00",
             "status": "当前",
-            "max_search_queries": 10,
-            "max_pages": 20,
-            "max_external_tool_calls": 10,
-            "max_api_calls": 0,
-            "max_cost": 0,
-            "cost_currency": "CNY",
-            "max_source_extract_chars": 2000,
-            "max_summary_chars": 4000,
-            "max_research_lines": 1000,
-            "max_research_bytes": 200000,
-            "max_evidence_bytes": 1000000,
-            "stop_behavior": "达到任一上限时停止对应新增工作",
             "input_tokens": None,
             "output_tokens": None,
             "search_return_size": 0,
@@ -1199,6 +1528,7 @@ decisions:
             "api_calls": 0,
             "elapsed_seconds": 0,
             "estimated_cost": 0,
+            "cost_currency": "CNY",
             "evidence_file_bytes": 0,
             "claim_count": 0,
             "context_compactions": 0,
@@ -1270,7 +1600,7 @@ decisions:
             "数据、baseline 与评测",
             "数据与隐私边界",
             "计算与外部服务",
-            "约束与预算",
+            "阶段二执行约束与资源方案",
             "Skills、依赖与授权",
             "范围外事项",
         )

@@ -23,6 +23,9 @@ REQUIRED_PATHS = (
     "README.md",
     "AGENTS.md",
     "RESEARCH.md",
+    "workflow/README.md",
+    "workflow/state.json",
+    "workflow/transitions.jsonl",
     "research/README.md",
     "research/search_log.jsonl",
     "research/search_coverage.yaml",
@@ -45,11 +48,15 @@ REQUIRED_PATHS = (
     "models/README.md",
     "baselines/README.md",
     "scripts/README.md",
+    "scripts/transition_workflow.py",
+    "scripts/manage_task_progress.py",
     "src/README.md",
+    "src/runtime/progress.py",
     "experiments/README.md",
     "experiments/scripts/README.md",
     "experiments/runs/README.md",
     "paper/README.md",
+    "paper/sessions/README.md",
     "paper/draft_zh.md",
     "paper/images/README.md",
     "patents/README.md",
@@ -82,6 +89,11 @@ PHASE_ONE_STATE_ORDER = (
     "CONFIRM",
     "GATE_CHECK",
 )
+WORKFLOW_NODE_ORDER = (
+    *PHASE_ONE_STATE_ORDER,
+    "阶段二：实验与分析",
+    "阶段三：论文写作",
+)
 REQUIRED_INTAKE_FIELDS = (
     "用户研究意图",
     "研究对象",
@@ -91,7 +103,6 @@ REQUIRED_INTAKE_FIELDS = (
     "数据条件",
     "baseline",
     "指标",
-    "时间和费用",
     "API/GPU",
     "数据许可和隐私",
     "范围外事项",
@@ -113,7 +124,7 @@ REQUIRED_CONTRACT_FIELDS = {
     "数据、baseline 与评测",
     "数据与隐私边界",
     "计算与外部服务",
-    "约束与预算",
+    "阶段二执行约束与资源方案",
     "Skills、依赖与授权",
     "范围外事项",
 }
@@ -246,18 +257,6 @@ RESOURCE_REQUIRED_FIELDS = {
     "resource_id",
     "recorded_at",
     "status",
-    "max_search_queries",
-    "max_pages",
-    "max_external_tool_calls",
-    "max_api_calls",
-    "max_cost",
-    "cost_currency",
-    "max_source_extract_chars",
-    "max_summary_chars",
-    "max_research_lines",
-    "max_research_bytes",
-    "max_evidence_bytes",
-    "stop_behavior",
     "input_tokens",
     "output_tokens",
     "search_return_size",
@@ -268,6 +267,7 @@ RESOURCE_REQUIRED_FIELDS = {
     "api_calls",
     "elapsed_seconds",
     "estimated_cost",
+    "cost_currency",
     "evidence_file_bytes",
     "claim_count",
     "context_compactions",
@@ -474,11 +474,19 @@ class WorkspaceValidator:
         self.check_required_paths()
         self.check_skill_layout()
         phase, status = self.check_stage_state()
+        self.check_machine_workflow_state()
         self.check_research_contract(phase, status)
         self.check_phase_one_evidence(phase, status)
         self.check_unresolved_todos(phase, status)
         self.check_registries()
         self.check_run_records()
+        self.check_experiment_reconciliation()
+        self.check_task_progress()
+        handoff_required = phase == "阶段三：论文写作" or (
+            phase == "阶段二：实验与分析" and status == "已完成"
+        )
+        self.check_stage_two_handoff(required=handoff_required)
+        self.check_stage_three_session_completion(phase, status)
         self.check_tracked_run_mutations()
         self.check_paper_traceability()
         self.check_suspected_secrets()
@@ -680,6 +688,158 @@ class WorkspaceValidator:
                 )
         return phase, status
 
+    def check_machine_workflow_state(self) -> None:
+        """Cross-check machine state, Markdown projection, and transition ledger."""
+
+        state_path = self.root / "workflow/state.json"
+        transitions_path = self.root / "workflow/transitions.jsonl"
+        research_path = self.root / "RESEARCH.md"
+        if not state_path.is_file() or not transitions_path.is_file() or not research_path.is_file():
+            return
+        state = self.read_json(state_path, "WORKFLOW_STATE_INVALID")
+        if state is None:
+            return
+        required = {
+            "schema_version",
+            "revision",
+            "current_phase",
+            "phase_one_substate",
+            "phase_status",
+            "gate_result",
+            "last_transition_id",
+            "updated_at",
+        }
+        missing = sorted(required - state.keys())
+        if missing:
+            self.add(
+                "ERROR",
+                "WORKFLOW_STATE_FIELDS_MISSING",
+                "workflow/state.json",
+                f"machine workflow state is missing: {', '.join(missing)}",
+            )
+        if state.get("schema_version") != 1:
+            self.add(
+                "ERROR",
+                "WORKFLOW_STATE_SCHEMA_INVALID",
+                "workflow/state.json",
+                "workflow state schema_version must be 1",
+            )
+        if state.get("current_phase") not in VALID_PHASES:
+            self.add("ERROR", "WORKFLOW_STATE_PHASE_INVALID", "workflow/state.json", "invalid current_phase")
+        if state.get("phase_one_substate") not in VALID_PHASE_ONE_STATES:
+            self.add("ERROR", "WORKFLOW_STATE_SUBSTATE_INVALID", "workflow/state.json", "invalid phase_one_substate")
+        if state.get("phase_status") not in VALID_PHASE_STATUSES:
+            self.add("ERROR", "WORKFLOW_STATE_STATUS_INVALID", "workflow/state.json", "invalid phase_status")
+        if state.get("gate_result") not in VALID_GATE_RESULTS:
+            self.add("ERROR", "WORKFLOW_STATE_GATE_INVALID", "workflow/state.json", "invalid gate_result")
+        revision = state.get("revision")
+        if not isinstance(revision, int) or isinstance(revision, bool) or revision < 0:
+            self.add("ERROR", "WORKFLOW_STATE_REVISION_INVALID", "workflow/state.json", "revision must be a non-negative integer")
+
+        research_text = research_path.read_text(encoding="utf-8")
+        projections = {
+            "current_phase": self.extract_field(research_text, "当前阶段"),
+            "phase_one_substate": self.extract_field(research_text, "阶段一子状态"),
+            "phase_status": self.extract_field(research_text, "阶段状态"),
+            "gate_result": self.extract_field(research_text, "阶段门禁"),
+        }
+        for field, projected in projections.items():
+            if state.get(field) != projected:
+                self.add(
+                    "ERROR",
+                    "WORKFLOW_STATE_PROJECTION_MISMATCH",
+                    "RESEARCH.md",
+                    f"{field} differs from workflow/state.json; use transition_workflow.py",
+                )
+
+        entries: list[dict[str, object]] = []
+        for line_number, line in enumerate(
+            transitions_path.read_text(encoding="utf-8").splitlines(), start=1
+        ):
+            if not line.strip():
+                continue
+            try:
+                entry = json.loads(line)
+            except json.JSONDecodeError:
+                self.add(
+                    "ERROR",
+                    "WORKFLOW_TRANSITION_JSON_INVALID",
+                    "workflow/transitions.jsonl",
+                    f"line {line_number} is not valid JSON",
+                )
+                continue
+            if not isinstance(entry, dict):
+                self.add(
+                    "ERROR",
+                    "WORKFLOW_TRANSITION_OBJECT_INVALID",
+                    "workflow/transitions.jsonl",
+                    f"line {line_number} must contain an object",
+                )
+                continue
+            entries.append(entry)
+        previous_target: object = None
+        for index, entry in enumerate(entries, start=1):
+            expected_id = f"TRANS-{index:03d}"
+            if entry.get("transition_id") != expected_id or entry.get("revision") != index:
+                self.add(
+                    "ERROR",
+                    "WORKFLOW_TRANSITION_SEQUENCE_INVALID",
+                    "workflow/transitions.jsonl",
+                    f"entry {index} must use {expected_id} and revision {index}",
+                )
+            source = entry.get("from_node")
+            target = entry.get("to_node")
+            if source not in WORKFLOW_NODE_ORDER or target not in WORKFLOW_NODE_ORDER:
+                self.add(
+                    "ERROR",
+                    "WORKFLOW_TRANSITION_NODE_INVALID",
+                    "workflow/transitions.jsonl",
+                    f"{expected_id} contains an invalid workflow node",
+                )
+            elif WORKFLOW_NODE_ORDER.index(target) > WORKFLOW_NODE_ORDER.index(source) + 1:
+                self.add(
+                    "ERROR",
+                    "WORKFLOW_TRANSITION_SKIPPED_STATE",
+                    "workflow/transitions.jsonl",
+                    f"{expected_id} skips a required workflow node",
+                )
+            if previous_target is not None and entry.get("from_node") != previous_target:
+                self.add(
+                    "ERROR",
+                    "WORKFLOW_TRANSITION_CHAIN_BROKEN",
+                    "workflow/transitions.jsonl",
+                    f"{expected_id} does not continue from the previous target",
+                )
+            previous_target = entry.get("to_node")
+        expected_last = entries[-1].get("transition_id") if entries else None
+        if state.get("last_transition_id") != expected_last or revision != len(entries):
+            self.add(
+                "ERROR",
+                "WORKFLOW_STATE_LEDGER_MISMATCH",
+                "workflow/state.json",
+                "state revision or last_transition_id differs from the transition ledger",
+            )
+        state_node = (
+            state.get("phase_one_substate")
+            if state.get("current_phase") == "阶段一：调研与设计"
+            else state.get("current_phase")
+        )
+        ledger_node = entries[-1].get("to_node") if entries else "INTAKE"
+        if state_node != ledger_node:
+            self.add(
+                "ERROR",
+                "WORKFLOW_STATE_TARGET_MISMATCH",
+                "workflow/state.json",
+                "machine state does not match the latest transition target",
+            )
+        if revision and self.parse_iso_datetime(state.get("updated_at")) is None:
+            self.add(
+                "ERROR",
+                "WORKFLOW_STATE_TIME_INVALID",
+                "workflow/state.json",
+                "updated_at must be a timezone-aware ISO timestamp after a transition",
+            )
+
     @staticmethod
     def extract_field(text: str, label: str) -> str | None:
         """Extract a Chinese list field while ignoring the final full stop."""
@@ -748,7 +908,11 @@ class WorkspaceValidator:
         return len(re.findall(r"(?<![/\.\w])TODO(?![/\.\w])", text))
 
     def check_research_contract(
-        self, phase: str | None, status: str | None
+        self,
+        phase: str | None,
+        status: str | None,
+        phase_one_state_override: str | None = None,
+        preflight_transition: bool = False,
     ) -> None:
         """Validate phase-one confirmation, stable IDs, and contract relations."""
 
@@ -757,7 +921,9 @@ class WorkspaceValidator:
             return
         text = path.read_text(encoding="utf-8")
         tables = self.parse_markdown_tables(text)
-        phase_one_state = self.extract_field(text, "阶段一子状态")
+        phase_one_state = phase_one_state_override or self.extract_field(
+            text, "阶段一子状态"
+        )
         transition_ready = phase in {
             "阶段二：实验与分析",
             "阶段三：论文写作",
@@ -972,9 +1138,15 @@ class WorkspaceValidator:
                                 f"{auth_id} is confirmed without an associated decision",
                             )
 
-        self.check_research_recovery(text, phase, status, transition_ready)
+        if not preflight_transition:
+            self.check_research_recovery(text, phase, status, transition_ready)
         self.check_research_contract_quality(text, tables, transition_ready)
         self.check_requirement_intake(tables, phase_one_state, transition_ready)
+        self.check_brainstorm(tables, text, phase_one_state, transition_ready)
+        if not preflight_transition:
+            self.check_transition_history(
+                tables, phase, phase_one_state, status, transition_ready
+            )
 
         definitions: dict[str, set[str]] = {}
         for id_column, signature_column, pattern in RESEARCH_ID_DEFINITIONS:
@@ -1021,7 +1193,7 @@ class WorkspaceValidator:
         phase_one_state: str | None,
         transition_ready: bool,
     ) -> None:
-        """Validate the ordered twelve-field research-intake protocol."""
+        """Validate progressive intake without front-loading execution details."""
 
         rows = next(
             (
@@ -1036,7 +1208,7 @@ class WorkspaceValidator:
                 "ERROR",
                 "RESEARCH_INTAKE_TABLE_MISSING",
                 "RESEARCH.md",
-                "legacy contract must add the ordered twelve-field requirement-intake table",
+                "research contract must add the progressive eleven-field intake table",
             )
             return
 
@@ -1046,7 +1218,7 @@ class WorkspaceValidator:
                 "ERROR",
                 "RESEARCH_INTAKE_ORDER_INVALID",
                 "RESEARCH.md",
-                "requirement-intake rows must contain the twelve required fields in order",
+                "requirement-intake rows must contain the eleven required fields in order",
             )
 
         for expected_index, row in enumerate(rows, start=1):
@@ -1102,18 +1274,18 @@ class WorkspaceValidator:
         state_index = PHASE_ONE_STATE_ORDER.index(phase_one_state)
         row_by_field = {row.get("需求字段", ""): row for row in rows}
         if state_index >= PHASE_ONE_STATE_ORDER.index("DIVERGE"):
-            for field in REQUIRED_INTAKE_FIELDS[:4]:
-                if row_by_field.get(field, {}).get("获取状态") == "待澄清":
-                    self.add(
-                        "ERROR",
-                        "RESEARCH_INTAKE_CORE_UNRESOLVED",
-                        "RESEARCH.md",
-                        f"{field} must be clarified before DIVERGE",
-                    )
+            field = REQUIRED_INTAKE_FIELDS[0]
+            if row_by_field.get(field, {}).get("获取状态") == "待澄清":
+                self.add(
+                    "ERROR",
+                    "RESEARCH_INTAKE_SEED_MISSING",
+                    "RESEARCH.md",
+                    "a usable research-intent seed is required before DIVERGE",
+                )
         if state_index >= PHASE_ONE_STATE_ORDER.index("SEARCH"):
             pending = [
                 field
-                for field in REQUIRED_INTAKE_FIELDS
+                for field in REQUIRED_INTAKE_FIELDS[:4]
                 if row_by_field.get(field, {}).get("获取状态") == "待澄清"
             ]
             if pending:
@@ -1121,7 +1293,7 @@ class WorkspaceValidator:
                     "ERROR",
                     "RESEARCH_INTAKE_INCOMPLETE_FOR_SEARCH",
                     "RESEARCH.md",
-                    f"all intake fields must be addressed before SEARCH: {', '.join(pending)}",
+                    f"direction-level intake must be addressed before SEARCH: {', '.join(pending)}",
                 )
         if state_index >= PHASE_ONE_STATE_ORDER.index("DRAFT") or transition_ready:
             unresolved = [
@@ -1137,6 +1309,98 @@ class WorkspaceValidator:
                     "RESEARCH.md",
                     f"final contract cannot be drafted from unresolved intake fields: {', '.join(unresolved)}",
                 )
+
+    def check_brainstorm(
+        self,
+        tables: list[tuple[list[str], list[dict[str, str]]]],
+        text: str,
+        phase_one_state: str | None,
+        transition_ready: bool,
+    ) -> None:
+        """Require a Codex-led divergence record before search begins."""
+
+        required_columns = {
+            "轮次",
+            "Codex 主动问题焦点",
+            "用户回答摘要",
+            "新增差异维度",
+            "关联候选方向",
+            "趋同判断",
+        }
+        rows = next(
+            (
+                table_rows
+                for headers, table_rows in tables
+                if required_columns.issubset(headers)
+            ),
+            None,
+        )
+        if rows is None:
+            self.add(
+                "ERROR",
+                "RESEARCH_BRAINSTORM_TABLE_MISSING",
+                "RESEARCH.md",
+                "research contract must contain the Codex-led brainstorming table",
+            )
+            return
+        if phase_one_state not in VALID_PHASE_ONE_STATES:
+            return
+        search_started = (
+            PHASE_ONE_STATE_ORDER.index(phase_one_state)
+            >= PHASE_ONE_STATE_ORDER.index("SEARCH")
+        ) or transition_ready
+        if not search_started:
+            return
+        real_rows = [
+            row
+            for row in rows
+            if row.get("轮次", "") not in PLACEHOLDER_CELLS
+            and not row.get("轮次", "").startswith("TODO")
+        ]
+        if not real_rows:
+            self.add(
+                "ERROR",
+                "RESEARCH_BRAINSTORM_RECORD_MISSING",
+                "RESEARCH.md",
+                "SEARCH requires at least one recorded Codex-led brainstorming round",
+            )
+        for row in real_rows:
+            missing = [
+                column
+                for column in required_columns - {"轮次"}
+                if row.get(column, "") in PLACEHOLDER_CELLS
+                or row.get(column, "").startswith("TODO")
+            ]
+            if missing:
+                self.add(
+                    "ERROR",
+                    "RESEARCH_BRAINSTORM_RECORD_INCOMPLETE",
+                    "RESEARCH.md",
+                    f"brainstorm round is missing: {', '.join(sorted(missing))}",
+                )
+            if row.get("趋同判断") not in {"有新差异", "趋同"}:
+                self.add(
+                    "ERROR",
+                    "RESEARCH_BRAINSTORM_CONVERGENCE_INVALID",
+                    "RESEARCH.md",
+                    "brainstorm convergence must be 有新差异 or 趋同",
+                )
+        conclusion = self.extract_field(text, "发散结论") or ""
+        more_ideas = self.extract_field(text, "用户是否还有更多想法") or ""
+        if conclusion in PLACEHOLDER_CELLS or conclusion.startswith("TODO"):
+            self.add(
+                "ERROR",
+                "RESEARCH_BRAINSTORM_CONCLUSION_MISSING",
+                "RESEARCH.md",
+                "SEARCH requires a recorded divergence conclusion",
+            )
+        if not more_ideas.startswith("暂无"):
+            self.add(
+                "ERROR",
+                "RESEARCH_BRAINSTORM_USER_EXIT_MISSING",
+                "RESEARCH.md",
+                "SEARCH requires the user to indicate there are temporarily no more ideas",
+            )
 
     def check_candidate_directions(
         self,
@@ -1294,6 +1558,124 @@ class WorkspaceValidator:
                     "the selected direction must reference a defined research question",
                 )
 
+    def check_transition_history(
+        self,
+        tables: list[tuple[list[str], list[dict[str, str]]]],
+        phase: str | None,
+        phase_one_state: str | None,
+        status: str | None,
+        transition_ready: bool,
+    ) -> None:
+        """Require a continuous, state-consistent workflow transition ledger."""
+
+        required_columns = {
+            "切换 ID",
+            "日期",
+            "原阶段",
+            "新阶段",
+            "门禁结果",
+            "原因或授权",
+            "决策 ID",
+        }
+        rows = next(
+            (
+                table_rows
+                for headers, table_rows in tables
+                if required_columns.issubset(headers)
+            ),
+            None,
+        )
+        if rows is None:
+            self.add(
+                "ERROR",
+                "RESEARCH_TRANSITION_TABLE_MISSING",
+                "RESEARCH.md",
+                "research contract must contain a workflow transition table",
+            )
+            return
+        real_rows = [
+            row
+            for row in rows
+            if re.fullmatch(r"TRANS-\d{3}", row.get("切换 ID", ""))
+        ]
+        if not real_rows:
+            if transition_ready or phase_one_state not in {None, "INTAKE"}:
+                self.add(
+                    "ERROR",
+                    "RESEARCH_TRANSITION_HISTORY_MISSING",
+                    "RESEARCH.md",
+                    "workflow progress requires a recorded transition history",
+                )
+            return
+
+        nodes = (*PHASE_ONE_STATE_ORDER, "阶段二：实验与分析", "阶段三：论文写作")
+        node_index = {node: index for index, node in enumerate(nodes)}
+        previous_target: str | None = None
+        for row in real_rows:
+            transition_id = row.get("切换 ID", "transition")
+            source = row.get("原阶段", "")
+            target = row.get("新阶段", "")
+            if source not in node_index or target not in node_index:
+                self.add(
+                    "ERROR",
+                    "RESEARCH_TRANSITION_NODE_INVALID",
+                    "RESEARCH.md",
+                    f"{transition_id} references an unsupported workflow node",
+                )
+                continue
+            if previous_target is not None and source != previous_target:
+                self.add(
+                    "ERROR",
+                    "RESEARCH_TRANSITION_CHAIN_BROKEN",
+                    "RESEARCH.md",
+                    f"{transition_id} does not continue from the previous transition",
+                )
+            if node_index[target] > node_index[source] + 1:
+                self.add(
+                    "ERROR",
+                    "RESEARCH_TRANSITION_STEP_SKIPPED",
+                    "RESEARCH.md",
+                    f"{transition_id} skips a required intermediate workflow state",
+                )
+            if target in {"阶段二：实验与分析", "阶段三：论文写作"} and row.get(
+                "门禁结果"
+            ) != "已通过":
+                self.add(
+                    "ERROR",
+                    "RESEARCH_TRANSITION_GATE_NOT_PASSED",
+                    "RESEARCH.md",
+                    f"{transition_id} enters a later stage without a passed gate",
+                )
+            for field in ("日期", "原因或授权"):
+                if row.get(field, "") in PLACEHOLDER_CELLS or row.get(
+                    field, ""
+                ).startswith("TODO"):
+                    self.add(
+                        "ERROR",
+                        "RESEARCH_TRANSITION_DETAIL_MISSING",
+                        "RESEARCH.md",
+                        f"{transition_id} is missing {field}",
+                    )
+            previous_target = target
+
+        expected_target = (
+            phase_one_state if phase == "阶段一：调研与设计" else phase
+        )
+        if previous_target != expected_target:
+            self.add(
+                "ERROR",
+                "RESEARCH_TRANSITION_STATE_MISMATCH",
+                "RESEARCH.md",
+                "latest transition target conflicts with the canonical workflow state",
+            )
+        if status == "已完成" and phase == "阶段一：调研与设计" and previous_target != "GATE_CHECK":
+            self.add(
+                "ERROR",
+                "RESEARCH_TRANSITION_COMPLETION_INVALID",
+                "RESEARCH.md",
+                "stage one cannot be complete before GATE_CHECK",
+            )
+
     @staticmethod
     def has_not_applicable_reason(value: str) -> bool:
         """Return whether an N/A value includes a human-readable reason."""
@@ -1316,6 +1698,13 @@ class WorkspaceValidator:
 
         labels = (
             "最近交接日期或轮次",
+            "当前全局阶段",
+            "当前阶段一子状态",
+            "当前候选方向",
+            "当前唯一选定方向",
+            "头脑风暴状态",
+            "最新趋同判断",
+            "用户是否还有更多想法",
             "本轮已确认事项",
             "本轮否决方案",
             "当前暂定假设",
@@ -1330,20 +1719,81 @@ class WorkspaceValidator:
             if self.extract_field(text, label) in {None, "", "TODO"}
             or str(self.extract_field(text, label)).startswith("TODO（")
         ]
-        if not missing:
-            return
-        if transition_ready:
-            severity = "ERROR"
-        elif phase == "阶段一：调研与设计" and status in {"进行中", "已暂停"}:
-            severity = "WARN"
-        else:
-            severity = "INFO"
-        self.add(
-            severity,
-            "RESEARCH_RECOVERY_INCOMPLETE",
-            "RESEARCH.md",
-            f"session recovery summary is incomplete: {', '.join(missing)}",
-        )
+        if missing:
+            if transition_ready:
+                severity = "ERROR"
+            elif phase == "阶段一：调研与设计" and status in {"进行中", "已暂停"}:
+                severity = "WARN"
+            else:
+                severity = "INFO"
+            self.add(
+                severity,
+                "RESEARCH_RECOVERY_INCOMPLETE",
+                "RESEARCH.md",
+                f"session recovery summary is incomplete: {', '.join(missing)}",
+            )
+
+        recovery_phase = self.extract_field(text, "当前全局阶段")
+        recovery_state = self.extract_field(text, "当前阶段一子状态")
+        if recovery_phase not in {None, "TODO", phase}:
+            self.add(
+                "ERROR",
+                "RESEARCH_RECOVERY_PHASE_CONFLICT",
+                "RESEARCH.md",
+                "session recovery phase conflicts with the canonical workflow state",
+            )
+        canonical_state = self.extract_field(text, "阶段一子状态")
+        if recovery_state not in {None, "TODO", canonical_state}:
+            self.add(
+                "ERROR",
+                "RESEARCH_RECOVERY_SUBSTATE_CONFLICT",
+                "RESEARCH.md",
+                "session recovery substate conflicts with the canonical phase-one state",
+            )
+
+        direction_rows = [
+            row
+            for headers, rows in self.parse_markdown_tables(text)
+            if "候选方向 ID" in headers and "状态" in headers
+            for row in rows
+            if re.fullmatch(r"DIR-\d{3}", row.get("候选方向 ID", ""))
+        ]
+        recovery_candidates = self.extract_field(text, "当前候选方向") or ""
+        recovery_selected = self.extract_field(text, "当前唯一选定方向") or ""
+        real_ids = {row.get("候选方向 ID", "") for row in direction_rows}
+        selected_ids = {
+            row.get("候选方向 ID", "")
+            for row in direction_rows
+            if row.get("状态") == "已选定"
+        }
+        if real_ids and recovery_candidates.startswith("无"):
+            self.add(
+                "ERROR",
+                "RESEARCH_RECOVERY_DIRECTION_CONFLICT",
+                "RESEARCH.md",
+                "session recovery says there are no candidates but direction records exist",
+            )
+        if not real_ids and re.search(r"DIR-\d{3}", recovery_candidates):
+            self.add(
+                "ERROR",
+                "RESEARCH_RECOVERY_DIRECTION_CONFLICT",
+                "RESEARCH.md",
+                "session recovery references candidate directions absent from the contract",
+            )
+        if selected_ids and not selected_ids.issubset(set(re.findall(r"DIR-\d{3}", recovery_selected))):
+            self.add(
+                "ERROR",
+                "RESEARCH_RECOVERY_SELECTION_CONFLICT",
+                "RESEARCH.md",
+                "session recovery selected direction conflicts with the direction table",
+            )
+        if not selected_ids and re.search(r"DIR-\d{3}", recovery_selected):
+            self.add(
+                "ERROR",
+                "RESEARCH_RECOVERY_SELECTION_CONFLICT",
+                "RESEARCH.md",
+                "session recovery claims a selected direction when none is selected",
+            )
 
     def check_research_contract_quality(
         self,
@@ -1432,24 +1882,13 @@ class WorkspaceValidator:
             "最大 GPU 时间",
             "最大 API 调用次数",
             "最大外部 API 预算",
-            "截止日期",
-            "最大搜索查询数",
-            "最大搜索页面数",
-            "最大外部工具调用数",
-            "阶段一最大 API 调用数",
-            "阶段一最大费用",
-            "单个来源最大抽取字符数",
-            "单份调研摘要最大字符数",
-            "`RESEARCH.md` 最大建议行数",
-            "`RESEARCH.md` 最大建议字节数",
-            "阶段一证据总存储上限",
-            "达到预算后的停止行为",
+            "阶段二失败停止规则",
         ):
             value = self.extract_field(text, label)
             if value is None or value in PLACEHOLDER_CELLS or value.startswith("TODO"):
                 self.add(
                     "ERROR",
-                    "RESEARCH_BUDGET_FIELD_MISSING",
+                    "RESEARCH_STAGE_TWO_RESOURCE_FIELD_MISSING",
                     "RESEARCH.md",
                     f"{label} must be explicit before stage two",
                 )
@@ -1762,7 +2201,10 @@ class WorkspaceValidator:
         return tables
 
     def check_phase_one_evidence(
-        self, phase: str | None, status: str | None
+        self,
+        phase: str | None,
+        status: str | None,
+        phase_one_state_override: str | None = None,
     ) -> None:
         """Validate phase-one search, source, claim, and decision evidence."""
 
@@ -1778,7 +2220,9 @@ class WorkspaceValidator:
         )
         research_tables = self.parse_markdown_tables(research_text)
         contract_ids = self.collect_research_definition_ids(research_tables)
-        phase_one_state = self.extract_field(research_text, "阶段一子状态")
+        phase_one_state = phase_one_state_override or self.extract_field(
+            research_text, "阶段一子状态"
+        )
         search_required = (
             phase_one_state in VALID_PHASE_ONE_STATES
             and PHASE_ONE_STATE_ORDER.index(phase_one_state)
@@ -1813,6 +2257,9 @@ class WorkspaceValidator:
             contract_ids.get("研究问题 ID", set()),
             transition_ready,
             source_entries=sources,
+        )
+        self.check_confirmed_data_evidence(
+            research_tables, claim_ids, eligible_claim_ids
         )
         decision_ids = self.validate_decision_evidence(
             decisions,
@@ -1849,8 +2296,7 @@ class WorkspaceValidator:
             sources,
             claims,
             search_entries,
-            phase,
-            status,
+            search_required,
             transition_ready,
         )
 
@@ -1883,6 +2329,55 @@ class WorkspaceValidator:
                 research_tables, source_ids, claim_ids, decision_ids
             )
 
+    def check_confirmed_data_evidence(
+        self,
+        tables: list[tuple[list[str], list[dict[str, str]]]],
+        claim_ids: set[str],
+        eligible_claim_ids: set[str],
+    ) -> None:
+        """Prevent a data choice from outrunning fit and license evidence maturity."""
+
+        data_rows = [
+            row
+            for headers, rows in tables
+            if {
+                "数据 ID",
+                "来源、版本与许可证",
+                "确认状态",
+                "证据 ID",
+            }.issubset(headers)
+            for row in rows
+            if re.fullmatch(r"DATA-\d{3}", row.get("数据 ID", ""))
+        ]
+        for row in data_rows:
+            if row.get("确认状态") != "已确认":
+                continue
+            data_id = row.get("数据 ID", "data")
+            evidence_ids = set(re.findall(r"CLM-\d{3}", row.get("证据 ID", "")))
+            if not evidence_ids:
+                self.add(
+                    "ERROR",
+                    "RESEARCH_DATA_CONFIRMATION_EVIDENCE_MISSING",
+                    "RESEARCH.md",
+                    f"{data_id} is confirmed without claim evidence for fit and licensing",
+                )
+                continue
+            unresolved = evidence_ids - claim_ids
+            ineligible = evidence_ids - eligible_claim_ids
+            if unresolved:
+                self.add(
+                    "ERROR",
+                    "RESEARCH_DATA_CONFIRMATION_EVIDENCE_UNRESOLVED",
+                    "RESEARCH.md",
+                    f"{data_id} references undefined claims: {', '.join(sorted(unresolved))}",
+                )
+            if ineligible:
+                self.add(
+                    "ERROR",
+                    "RESEARCH_DATA_CONFIRMATION_EVIDENCE_IMMATURE",
+                    "RESEARCH.md",
+                    f"{data_id} is confirmed using unverified, conflicting, or contract-ineligible claims: {', '.join(sorted(ineligible))}",
+                )
     @staticmethod
     def collect_research_definition_ids(
         tables: list[tuple[list[str], list[dict[str, str]]]],
@@ -3157,7 +3652,7 @@ class WorkspaceValidator:
         claims: list[dict[str, object]],
         search_required: bool,
     ) -> None:
-        """Validate phase-one budgets, resource metrics, and size limits."""
+        """Validate phase-one usage metrics without enforcing fixed quotas."""
 
         relative = "research/resources.yaml"
         current_entries: list[dict[str, object]] = []
@@ -3208,51 +3703,6 @@ class WorkspaceValidator:
                     "RESEARCH_RESOURCE_DATE_MISSING",
                     relative,
                     f"{resource_id} recorded_at must be explicit",
-                )
-            budget_integer_fields = (
-                "max_search_queries",
-                "max_pages",
-                "max_external_tool_calls",
-                "max_api_calls",
-                "max_source_extract_chars",
-                "max_summary_chars",
-                "max_research_lines",
-                "max_research_bytes",
-                "max_evidence_bytes",
-            )
-            for field in budget_integer_fields:
-                value = entry.get(field)
-                if not isinstance(value, int) or isinstance(value, bool) or value < 0:
-                    self.add(
-                        "ERROR",
-                        "RESEARCH_RESOURCE_BUDGET_INVALID",
-                        relative,
-                        f"{resource_id} {field} must be a non-negative integer",
-                    )
-            max_cost = entry.get("max_cost")
-            if (
-                not isinstance(max_cost, (int, float))
-                or isinstance(max_cost, bool)
-                or max_cost < 0
-            ):
-                self.add(
-                    "ERROR",
-                    "RESEARCH_RESOURCE_BUDGET_INVALID",
-                    relative,
-                    f"{resource_id} max_cost must be non-negative",
-                )
-            self.require_nonempty_string_fields(
-                relative,
-                resource_id,
-                entry,
-                ("cost_currency", "stop_behavior"),
-            )
-            if "停止" not in str(entry.get("stop_behavior", "")):
-                self.add(
-                    "ERROR",
-                    "RESEARCH_RESOURCE_STOP_BEHAVIOR_INVALID",
-                    relative,
-                    f"{resource_id} stop_behavior must explicitly stop new work at the limit",
                 )
             usage_fields = (
                 "input_tokens",
@@ -3309,6 +3759,9 @@ class WorkspaceValidator:
                     relative,
                     f"{resource_id} search_return_unit is invalid",
                 )
+            self.require_nonempty_string_fields(
+                relative, resource_id, entry, ("cost_currency",)
+            )
         if search_required and len(current_entries) != 1:
             self.add(
                 "ERROR",
@@ -3320,39 +3773,6 @@ class WorkspaceValidator:
             return
         current = current_entries[0]
 
-        def current_budget_integer(field: str) -> int | None:
-            value = current.get(field)
-            return (
-                value
-                if isinstance(value, int) and not isinstance(value, bool) and value >= 0
-                else None
-            )
-
-        comparisons = (
-            ("search_queries", "max_search_queries"),
-            ("search_pages", "max_pages"),
-            ("external_tool_calls", "max_external_tool_calls"),
-            ("api_calls", "max_api_calls"),
-            ("estimated_cost", "max_cost"),
-        )
-        for usage_field, budget_field in comparisons:
-            usage = current.get(usage_field)
-            budget = current.get(budget_field)
-            if isinstance(usage, (int, float)) and isinstance(budget, (int, float)):
-                if usage > budget:
-                    self.add(
-                        "ERROR",
-                        "RESEARCH_RESOURCE_BUDGET_EXCEEDED",
-                        relative,
-                        f"{usage_field} exceeds {budget_field}; stop new work",
-                    )
-                elif usage == budget:
-                    self.add(
-                        "INFO",
-                        "RESEARCH_RESOURCE_BUDGET_REACHED",
-                        relative,
-                        f"{usage_field} reached its limit; no new corresponding work is allowed",
-                    )
         if current.get("search_queries") != len(search_entries):
             self.add(
                 "WARN",
@@ -3367,51 +3787,7 @@ class WorkspaceValidator:
                 relative,
                 "resource claim_count does not match claims.yaml",
             )
-        research_path = self.root / "RESEARCH.md"
-        if research_path.is_file():
-            research_text = research_path.read_text(encoding="utf-8")
-            max_research_lines = current_budget_integer("max_research_lines")
-            if max_research_lines is not None and len(
-                research_text.splitlines()
-            ) > max_research_lines:
-                self.add(
-                    "WARN",
-                    "RESEARCH_RESOURCE_RESEARCH_LINES_EXCEEDED",
-                    "RESEARCH.md",
-                    "RESEARCH.md exceeds the current suggested line budget",
-                )
-            max_research_bytes = current_budget_integer("max_research_bytes")
-            if max_research_bytes is not None and len(
-                research_text.encode("utf-8")
-            ) > max_research_bytes:
-                self.add(
-                    "WARN",
-                    "RESEARCH_RESOURCE_RESEARCH_BYTES_EXCEEDED",
-                    "RESEARCH.md",
-                    "RESEARCH.md exceeds the current suggested byte budget",
-                )
-        summary_limit = current_budget_integer("max_summary_chars")
-        summaries_root = self.root / "research/summaries"
-        if summaries_root.is_dir() and summary_limit is not None:
-            for path in summaries_root.glob("*.md"):
-                if path.name == "README.md":
-                    continue
-                if len(path.read_text(encoding="utf-8")) > summary_limit:
-                    self.add(
-                        "ERROR",
-                        "RESEARCH_SUMMARY_SIZE_EXCEEDED",
-                        path.relative_to(self.root).as_posix(),
-                        "summary exceeds max_summary_chars",
-                    )
         evidence_bytes = self.phase_one_evidence_bytes()
-        max_evidence_bytes = current_budget_integer("max_evidence_bytes")
-        if max_evidence_bytes is not None and evidence_bytes > max_evidence_bytes:
-            self.add(
-                "ERROR",
-                "RESEARCH_EVIDENCE_STORAGE_BUDGET_EXCEEDED",
-                "research/",
-                "phase-one evidence exceeds max_evidence_bytes; stop new work",
-            )
         recorded_bytes = current.get("evidence_file_bytes")
         if isinstance(recorded_bytes, (int, float)) and recorded_bytes != evidence_bytes:
             self.add(
@@ -3446,16 +3822,12 @@ class WorkspaceValidator:
         sources: list[dict[str, object]],
         claims: list[dict[str, object]],
         search_entries: list[dict[str, object]],
-        phase: str | None,
-        status: str | None,
+        search_required: bool,
         transition_ready: bool,
     ) -> None:
         """Emit bounded quality warnings without pretending to judge research merit."""
 
-        research_active = (
-            phase == "阶段一：调研与设计" and status in {"进行中", "已完成"}
-        ) or phase in {"阶段二：实验与分析", "阶段三：论文写作"}
-        if research_active and not search_entries:
+        if search_required and not search_entries:
             self.add(
                 "WARN",
                 "RESEARCH_SEARCH_LOG_EMPTY",
@@ -3878,10 +4250,17 @@ class WorkspaceValidator:
             ".DS_Store",
             "__pycache__",
         }
-        return any(
-            path.name not in ignored_names and not path.name.startswith(".")
-            for path in directory.iterdir()
-        )
+        for path in directory.iterdir():
+            if path.name in ignored_names or path.name.startswith("."):
+                continue
+            if path.is_file():
+                return True
+            if path.is_dir() and any(
+                child.name not in ignored_names and not child.name.startswith(".")
+                for child in path.rglob("*")
+            ):
+                return True
+        return False
 
     def directory_has_run_objects(self) -> bool:
         """Return whether at least one concrete run directory exists."""
@@ -3928,11 +4307,38 @@ class WorkspaceValidator:
                     "metadata status must be success or failed",
                 )
                 continue
+            for field, pattern in (
+                ("research_question_ids", r"RQ-\d{3}"),
+                ("success_criterion_ids", r"SC-\d{3}"),
+                ("decision_ids", r"DEC-\d{3}"),
+            ):
+                identifiers = metadata.get(field)
+                if not isinstance(identifiers, list) or not identifiers or any(
+                    not isinstance(identifier, str)
+                    or not re.fullmatch(pattern, identifier)
+                    for identifier in identifiers
+                ):
+                    self.add(
+                        "ERROR",
+                        "RUN_CONTRACT_REFERENCES_INVALID",
+                        relative,
+                        f"metadata {field} must be a non-empty valid ID array",
+                    )
             self.check_run_resources(metadata, relative)
             required = (
-                ("command.txt", "config_snapshot.json", "metrics.json")
+                (
+                    "command.txt",
+                    "config_snapshot.json",
+                    "environment.json",
+                    "script_path.txt",
+                    "metrics.json",
+                    "run.log",
+                    "status.json",
+                    "events.jsonl",
+                    "heartbeat.json",
+                )
                 if status == "success"
-                else ("run.log",)
+                else ("run.log", "status.json", "events.jsonl", "heartbeat.json")
             )
             for filename in required:
                 if not (run_dir / filename).is_file():
@@ -3953,6 +4359,267 @@ class WorkspaceValidator:
                 path = run_dir / filename
                 if path.is_file():
                     self.read_json(path, "RUN_JSON_INVALID")
+            if status == "success":
+                self.check_success_run_reproducibility(metadata, run_dir, relative)
+            self.check_archived_run_progress(run_dir, relative, status)
+
+    def check_archived_run_progress(
+        self, run_dir: Path, relative: str, run_status: str
+    ) -> None:
+        """Validate the final progress snapshot archived with a run."""
+
+        status_path = run_dir / "status.json"
+        heartbeat_path = run_dir / "heartbeat.json"
+        events_path = run_dir / "events.jsonl"
+        if not all(path.is_file() for path in (status_path, heartbeat_path, events_path)):
+            return
+        task_status = self.read_json(status_path, "RUN_PROGRESS_STATUS_INVALID")
+        heartbeat = self.read_json(heartbeat_path, "RUN_PROGRESS_HEARTBEAT_INVALID")
+        if task_status is not None:
+            expected = "success" if run_status == "success" else "failed"
+            if task_status.get("status") != expected:
+                self.add(
+                    "ERROR",
+                    "RUN_PROGRESS_STATUS_MISMATCH",
+                    relative,
+                    f"archived task status must be {expected}",
+                )
+        if task_status is not None and heartbeat is not None and heartbeat.get(
+            "task_run_id"
+        ) != task_status.get("task_run_id"):
+            self.add(
+                "ERROR",
+                "RUN_PROGRESS_HEARTBEAT_MISMATCH",
+                relative,
+                "archived heartbeat does not match the task status",
+            )
+        try:
+            event_lines = events_path.read_text(encoding="utf-8").splitlines()
+        except (OSError, UnicodeError):
+            event_lines = []
+        if not event_lines:
+            self.add(
+                "ERROR",
+                "RUN_PROGRESS_EVENTS_MISSING",
+                relative,
+                "archived events.jsonl must contain progress events",
+            )
+
+    def check_success_run_reproducibility(
+        self, metadata: dict[str, object], run_dir: Path, relative: str
+    ) -> None:
+        """Check successful runs for data, seed, environment, and usage evidence."""
+
+        data_versions = metadata.get("data_versions")
+        if not isinstance(data_versions, list) or not data_versions:
+            self.add(
+                "ERROR",
+                "RUN_DATA_VERSION_MISSING",
+                relative,
+                "successful run must record at least one data version and checksum",
+            )
+        else:
+            for index, item in enumerate(data_versions, start=1):
+                if not isinstance(item, dict) or any(
+                    not item.get(field)
+                    for field in ("data_id", "version", "checksum", "checksum_algorithm")
+                ):
+                    self.add(
+                        "ERROR",
+                        "RUN_DATA_VERSION_INVALID",
+                        relative,
+                        f"data_versions item {index} lacks ID, version, checksum, or algorithm",
+                    )
+        if "random_seed" not in metadata:
+            self.add(
+                "ERROR",
+                "RUN_RANDOM_SEED_MISSING",
+                relative,
+                "successful run must record random_seed, using null only when inapplicable",
+            )
+        metrics_path = run_dir / "metrics.json"
+        metrics = (
+            self.read_json(metrics_path, "RUN_JSON_INVALID")
+            if metrics_path.is_file()
+            else None
+        )
+        resources = metadata.get("resources")
+        gpu = resources.get("gpu") if isinstance(resources, dict) else None
+        api = resources.get("api") if isinstance(resources, dict) else None
+        if isinstance(gpu, dict) and gpu.get("enabled") is True:
+            missing_gpu_metadata = [
+                field
+                for field in ("cuda_version", "pytorch_version", "available_vram_bytes")
+                if gpu.get(field) is None or gpu.get(field) in ("", "TODO")
+            ]
+            if missing_gpu_metadata:
+                self.add(
+                    "ERROR",
+                    "RUN_GPU_ENVIRONMENT_MISSING",
+                    relative,
+                    f"GPU run is missing: {', '.join(missing_gpu_metadata)}",
+                )
+            gpu_metrics = metrics.get("gpu") if isinstance(metrics, dict) else None
+            if not isinstance(gpu_metrics, dict) or any(
+                field not in gpu_metrics
+                for field in ("gpu_seconds", "peak_vram_bytes", "training_steps")
+            ):
+                self.add(
+                    "ERROR",
+                    "RUN_GPU_USAGE_MISSING",
+                    relative,
+                    "GPU metrics must record GPU seconds, peak VRAM, and training steps",
+                )
+        if isinstance(api, dict) and api.get("enabled") is True:
+            api_metrics = metrics.get("api") if isinstance(metrics, dict) else None
+            api_fields = (
+                "calls",
+                "successes",
+                "failures",
+                "retries",
+                "rate_limits",
+                "input_tokens",
+                "output_tokens",
+                "elapsed_seconds",
+                "estimated_cost",
+                "cost_currency",
+            )
+            if not isinstance(api_metrics, dict) or any(
+                field not in api_metrics for field in api_fields
+            ):
+                self.add(
+                    "ERROR",
+                    "RUN_API_USAGE_MISSING",
+                    relative,
+                    "API metrics must record calls, outcomes, retries, tokens, time, and cost",
+                )
+
+    def check_experiment_reconciliation(self) -> None:
+        """Reconcile experiment registry entries with local immutable runs."""
+
+        relative = "experiments/registry.yaml"
+        path = self.root / relative
+        run_records: dict[str, dict[str, object]] = {}
+        runs_root = self.root / "experiments/runs"
+        if runs_root.is_dir():
+            for run_dir in sorted(item for item in runs_root.iterdir() if item.is_dir()):
+                metadata_path = run_dir / "metadata.json"
+                if metadata_path.is_file():
+                    metadata = self.read_json(
+                        metadata_path, "EXPERIMENT_RECONCILIATION_RUN_INVALID"
+                    )
+                    if metadata is not None:
+                        run_records[run_dir.name] = metadata
+        if not path.is_file():
+            if run_records:
+                self.add(
+                    "ERROR",
+                    "EXPERIMENT_REGISTRY_MISSING_FOR_RUNS",
+                    relative,
+                    "local run records exist but experiments/registry.yaml is missing",
+                )
+            return
+        entries = self.read_flat_yaml_registry(relative, "experiments", "experiment_id")
+        if entries is None:
+            return
+        registry_run_ids: set[str] = set()
+        registry_experiment_ids: set[str] = set()
+        for entry in entries:
+            experiment_id = entry.get("experiment_id")
+            if not isinstance(experiment_id, str) or not re.fullmatch(
+                r"exp-\d{3}", experiment_id
+            ):
+                self.add(
+                    "ERROR",
+                    "EXPERIMENT_REGISTRY_ID_INVALID",
+                    relative,
+                    "experiment_id must match exp-<nnn>",
+                )
+                continue
+            registry_experiment_ids.add(experiment_id)
+            status = entry.get("status")
+            if status not in {
+                "planned",
+                "queued",
+                "running",
+                "blocked",
+                "failed",
+                "completed",
+            }:
+                self.add(
+                    "ERROR",
+                    "EXPERIMENT_REGISTRY_STATUS_INVALID",
+                    relative,
+                    f"{experiment_id} has an unsupported status",
+                )
+            runs = entry.get("runs")
+            if not isinstance(runs, list):
+                self.add(
+                    "ERROR",
+                    "EXPERIMENT_REGISTRY_RUNS_INVALID",
+                    relative,
+                    f"{experiment_id} runs must be a JSON array",
+                )
+                continue
+            successful_runs = 0
+            for run_id in runs:
+                if not isinstance(run_id, str):
+                    self.add(
+                        "ERROR",
+                        "EXPERIMENT_REGISTRY_RUN_ID_INVALID",
+                        relative,
+                        f"{experiment_id} contains a non-string run ID",
+                    )
+                    continue
+                registry_run_ids.add(run_id)
+                metadata = run_records.get(run_id)
+                if metadata is None:
+                    self.add(
+                        "ERROR",
+                        "EXPERIMENT_REGISTRY_RUN_MISSING",
+                        relative,
+                        f"registered run does not exist locally: {run_id}",
+                    )
+                    continue
+                if metadata.get("experiment_id") != experiment_id:
+                    self.add(
+                        "ERROR",
+                        "EXPERIMENT_REGISTRY_RUN_MISMATCH",
+                        relative,
+                        f"{run_id} belongs to a different experiment",
+                    )
+                if metadata.get("status") == "success":
+                    successful_runs += 1
+            if status == "planned" and runs:
+                self.add(
+                    "ERROR",
+                    "EXPERIMENT_REGISTRY_PLANNED_WITH_RUNS",
+                    relative,
+                    f"{experiment_id} is planned but already lists local runs",
+                )
+            if status == "completed" and successful_runs == 0:
+                self.add(
+                    "ERROR",
+                    "EXPERIMENT_REGISTRY_COMPLETED_WITHOUT_SUCCESS",
+                    relative,
+                    f"{experiment_id} is completed without a successful local run",
+                )
+        for run_id, metadata in run_records.items():
+            experiment_id = metadata.get("experiment_id")
+            if run_id not in registry_run_ids:
+                self.add(
+                    "ERROR",
+                    "EXPERIMENT_RUN_UNREGISTERED",
+                    f"experiments/runs/{run_id}",
+                    "local run is not listed in experiments/registry.yaml",
+                )
+            if isinstance(experiment_id, str) and experiment_id not in registry_experiment_ids:
+                self.add(
+                    "ERROR",
+                    "EXPERIMENT_RUN_EXPERIMENT_UNREGISTERED",
+                    f"experiments/runs/{run_id}",
+                    f"run experiment is absent from registry: {experiment_id}",
+                )
 
     def check_run_resources(
         self, metadata: dict[str, object], relative: str
@@ -4042,6 +4709,339 @@ class WorkspaceValidator:
                     relative,
                     "a joint API/GPU run must record resources.data_flow",
                 )
+
+    def check_task_progress(self) -> None:
+        """Validate observable stage-two and stage-three task records."""
+
+        roots = (
+            ("workflow/tasks", "stage_two"),
+            ("paper/sessions", "stage_three"),
+        )
+        required_status_fields = {
+            "schema_version",
+            "task_run_id",
+            "stage",
+            "task_kind",
+            "label",
+            "status",
+            "step",
+            "completed",
+            "total",
+            "started_at",
+            "updated_at",
+            "resources",
+            "outputs",
+        }
+        for relative_root, expected_stage in roots:
+            task_root = self.root / relative_root
+            if not task_root.is_dir():
+                continue
+            for task_dir in sorted(path for path in task_root.iterdir() if path.is_dir()):
+                relative = task_dir.relative_to(self.root).as_posix()
+                paths = {
+                    name: task_dir / name
+                    for name in ("status.json", "events.jsonl", "heartbeat.json")
+                }
+                missing_files = [name for name, path in paths.items() if not path.is_file()]
+                if missing_files:
+                    self.add(
+                        "ERROR",
+                        "TASK_PROGRESS_FILES_MISSING",
+                        relative,
+                        f"task progress is missing: {', '.join(missing_files)}",
+                    )
+                    continue
+                status = self.read_json(paths["status.json"], "TASK_STATUS_INVALID")
+                heartbeat = self.read_json(
+                    paths["heartbeat.json"], "TASK_HEARTBEAT_INVALID"
+                )
+                if status is None or heartbeat is None:
+                    continue
+                missing_fields = sorted(required_status_fields - status.keys())
+                if missing_fields:
+                    self.add(
+                        "ERROR",
+                        "TASK_STATUS_FIELDS_MISSING",
+                        relative,
+                        f"status.json is missing: {', '.join(missing_fields)}",
+                    )
+                if status.get("stage") != expected_stage:
+                    self.add(
+                        "ERROR",
+                        "TASK_STAGE_INVALID",
+                        relative,
+                        f"task under {relative_root} must use stage {expected_stage}",
+                    )
+                task_status = status.get("status")
+                if task_status not in {"queued", "running", "blocked", "failed", "success"}:
+                    self.add(
+                        "ERROR",
+                        "TASK_STATUS_VALUE_INVALID",
+                        relative,
+                        "task status must be queued, running, blocked, failed, or success",
+                    )
+                if task_status == "blocked" and (
+                    not status.get("blocked_reason")
+                    or not status.get("resume_condition")
+                ):
+                    self.add(
+                        "ERROR",
+                        "TASK_BLOCKER_DETAILS_MISSING",
+                        relative,
+                        "blocked task must record a reason and resume condition",
+                    )
+                if task_status == "failed" and not status.get("blocked_reason"):
+                    self.add(
+                        "ERROR",
+                        "TASK_FAILURE_REASON_MISSING",
+                        relative,
+                        "failed task must record its failure reason",
+                    )
+                completed = status.get("completed")
+                total = status.get("total")
+                if not isinstance(completed, int) or completed < 0:
+                    self.add(
+                        "ERROR",
+                        "TASK_PROGRESS_VALUE_INVALID",
+                        relative,
+                        "completed must be a non-negative integer",
+                    )
+                if total is not None and (
+                    not isinstance(total, int)
+                    or total < 0
+                    or (isinstance(completed, int) and completed > total)
+                ):
+                    self.add(
+                        "ERROR",
+                        "TASK_PROGRESS_VALUE_INVALID",
+                        relative,
+                        "total must be null or a non-negative integer not below completed",
+                    )
+                if (
+                    task_status == "success"
+                    and isinstance(total, int)
+                    and total > 0
+                    and completed != total
+                ):
+                    self.add(
+                        "ERROR",
+                        "TASK_SUCCESS_INCOMPLETE",
+                        relative,
+                        "successful task must complete its declared total",
+                    )
+                if heartbeat.get("task_run_id") != status.get("task_run_id"):
+                    self.add(
+                        "ERROR",
+                        "TASK_HEARTBEAT_ID_MISMATCH",
+                        relative,
+                        "heartbeat task_run_id does not match status.json",
+                    )
+                heartbeat_at = self.parse_iso_datetime(heartbeat.get("heartbeat_at"))
+                if heartbeat_at is None:
+                    self.add(
+                        "ERROR",
+                        "TASK_HEARTBEAT_TIME_INVALID",
+                        relative,
+                        "heartbeat_at must be a timezone-aware ISO timestamp",
+                    )
+                elif task_status == "running" and (
+                    datetime.now(timezone.utc) - heartbeat_at
+                ).total_seconds() > 120:
+                    self.add(
+                        "WARN",
+                        "TASK_HEARTBEAT_STALE",
+                        relative,
+                        "running task heartbeat is older than 120 seconds",
+                    )
+                try:
+                    event_lines = paths["events.jsonl"].read_text(
+                        encoding="utf-8"
+                    ).splitlines()
+                except (OSError, UnicodeError):
+                    event_lines = []
+                if not event_lines:
+                    self.add(
+                        "ERROR",
+                        "TASK_EVENTS_MISSING",
+                        relative,
+                        "events.jsonl must contain at least one event",
+                    )
+                for line_number, line in enumerate(event_lines, start=1):
+                    try:
+                        event = json.loads(line)
+                    except json.JSONDecodeError:
+                        self.add(
+                            "ERROR",
+                            "TASK_EVENT_INVALID",
+                            relative,
+                            f"events.jsonl line {line_number} is invalid JSON",
+                        )
+                        continue
+                    if not isinstance(event, dict) or event.get("task_run_id") != status.get(
+                        "task_run_id"
+                    ):
+                        self.add(
+                            "ERROR",
+                            "TASK_EVENT_ID_MISMATCH",
+                            relative,
+                            f"events.jsonl line {line_number} has the wrong task_run_id",
+                        )
+
+    def check_stage_two_handoff(self, *, required: bool) -> None:
+        """Require a reconciled evidence handoff before stage three."""
+
+        relative = "experiments/evidence_handoff.yaml"
+        path = self.root / relative
+        if not path.is_file():
+            if required:
+                self.add(
+                    "ERROR",
+                    "STAGE_TWO_HANDOFF_MISSING",
+                    relative,
+                    "stage two must produce an evidence handoff before stage three",
+                )
+            return
+        entries = self.read_flat_yaml_registry(relative, "handoffs", "handoff_id")
+        if entries is None:
+            return
+        if required and len(entries) != 1:
+            self.add(
+                "ERROR",
+                "STAGE_TWO_HANDOFF_COUNT_INVALID",
+                relative,
+                "exactly one current evidence handoff is required",
+            )
+        required_fields = {
+            "handoff_id",
+            "research_question_ids",
+            "success_criterion_ids",
+            "experiment_ids",
+            "run_ids",
+            "supported_claims",
+            "unsupported_claims",
+            "negative_results",
+            "limitations",
+            "local_evidence_verified",
+            "registry_reconciled",
+            "completed_at",
+        }
+        for entry in entries:
+            missing = sorted(required_fields - entry.keys())
+            if missing:
+                self.add(
+                    "ERROR",
+                    "STAGE_TWO_HANDOFF_FIELDS_MISSING",
+                    relative,
+                    f"handoff is missing: {', '.join(missing)}",
+                )
+            handoff_id = entry.get("handoff_id")
+            if not isinstance(handoff_id, str) or not re.fullmatch(
+                r"HANDOFF-\d{3}", handoff_id
+            ):
+                self.add(
+                    "ERROR",
+                    "STAGE_TWO_HANDOFF_ID_INVALID",
+                    relative,
+                    "handoff_id must match HANDOFF-<nnn>",
+                )
+            for flag in ("local_evidence_verified", "registry_reconciled"):
+                if entry.get(flag) is not True:
+                    self.add(
+                        "ERROR",
+                        "STAGE_TWO_HANDOFF_UNRECONCILED",
+                        relative,
+                        f"{flag} must be true before stage three",
+                    )
+            if self.parse_iso_datetime(entry.get("completed_at")) is None:
+                self.add(
+                    "ERROR",
+                    "STAGE_TWO_HANDOFF_TIME_INVALID",
+                    relative,
+                    "completed_at must be a timezone-aware ISO timestamp",
+                )
+            experiment_ids = entry.get("experiment_ids")
+            if not isinstance(experiment_ids, list) or not experiment_ids:
+                self.add(
+                    "ERROR",
+                    "STAGE_TWO_HANDOFF_EXPERIMENTS_MISSING",
+                    relative,
+                    "handoff must identify at least one experiment",
+                )
+            run_ids = entry.get("run_ids")
+            if required and (not isinstance(run_ids, list) or not run_ids):
+                self.add(
+                    "ERROR",
+                    "STAGE_TWO_HANDOFF_RUNS_MISSING",
+                    relative,
+                    "handoff must identify at least one successful local run",
+                )
+                continue
+            if isinstance(run_ids, list):
+                for run_id in run_ids:
+                    run_relative = f"experiments/runs/{run_id}"
+                    metadata_path = self.root / run_relative / "metadata.json"
+                    metadata = (
+                        self.read_json(metadata_path, "STAGE_TWO_HANDOFF_RUN_INVALID")
+                        if metadata_path.is_file()
+                        else None
+                    )
+                    if metadata is None or metadata.get("status") != "success":
+                        self.add(
+                            "ERROR",
+                            "STAGE_TWO_HANDOFF_RUN_INVALID",
+                            relative,
+                            f"handoff run is missing locally or not successful: {run_id}",
+                        )
+                    elif isinstance(experiment_ids, list) and metadata.get(
+                        "experiment_id"
+                    ) not in experiment_ids:
+                        self.add(
+                            "ERROR",
+                            "STAGE_TWO_HANDOFF_RUN_MISMATCH",
+                            relative,
+                            f"handoff run belongs to an unlisted experiment: {run_id}",
+                        )
+
+    def check_stage_three_session_completion(
+        self, phase: str | None, status: str | None
+    ) -> None:
+        """Require a successful observable writing session for completion."""
+
+        if phase != "阶段三：论文写作" or status != "已完成":
+            return
+        sessions_root = self.root / "paper/sessions"
+        successful = False
+        if sessions_root.is_dir():
+            for session_dir in sessions_root.iterdir():
+                if not session_dir.is_dir():
+                    continue
+                status_path = session_dir / "status.json"
+                if not status_path.is_file():
+                    continue
+                session = self.read_json(status_path, "STAGE_THREE_SESSION_INVALID")
+                if session is not None and session.get("status") == "success":
+                    successful = True
+        if not successful:
+            self.add(
+                "ERROR",
+                "STAGE_THREE_SESSION_INCOMPLETE",
+                "paper/sessions",
+                "completed stage three requires at least one successful writing session",
+            )
+
+    @staticmethod
+    def parse_iso_datetime(value: object) -> datetime | None:
+        """Return a timezone-aware datetime for a valid ISO timestamp."""
+
+        if not isinstance(value, str):
+            return None
+        try:
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+        if parsed.tzinfo is None:
+            return None
+        return parsed.astimezone(timezone.utc)
 
     @classmethod
     def nested_keys(cls, value: object) -> set[str]:

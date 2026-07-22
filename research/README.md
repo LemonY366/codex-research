@@ -14,7 +14,7 @@ research/
 ├── sources.yaml       # 正式来源元数据，使用 SRC-<nnn>
 ├── claims.yaml        # 最小事实主张与证据关系，使用 CLM-<nnn>
 ├── decisions.yaml     # 研究决策与支撑链，使用 DEC-<nnn>
-├── resources.yaml     # 阶段一预算与累计资源快照
+├── resources.yaml     # 阶段一累计资源计量快照
 ├── archive/           # 已封存、不可倒改的搜索日志分片
 └── summaries/         # 按研究问题生成的精简、可回查摘要
 ```
@@ -136,9 +136,9 @@ research/
 
 ## `resources.yaml`
 
-文件顶层包含 `schema_version: 1` 和 `snapshots` 列表，真实快照使用 `RES-<nnn>`。进入 `SEARCH` 前建立一个 `status: 当前` 的快照；预算调整或阶段压缩时新增快照并把旧记录改为 `已归档`，保留决策依据。
+文件顶层包含 `schema_version: 1` 和 `snapshots` 列表，真实快照使用 `RES-<nnn>`。开始实际 `SEARCH` 时建立一个 `status: 当前` 的快照；阶段压缩、计量口径变化或会话交接需要冻结旧快照时，将旧记录改为 `已归档` 并新建快照。
 
-预算字段至少包括最大搜索查询、页面、外部工具调用、API 调用、费用、单来源抽取字符、单摘要字符、`RESEARCH.md` 行数/字节和阶段一证据总字节，以及明确的停止行为。使用量字段至少包括输入/输出 token、搜索返回量及单位、查询和页面数、外部工具/API 调用、耗时、估算费用、证据字节、主张数和上下文压缩次数。不可获得的使用指标写 `null` 并列入 `unavailable_metrics`；预算字段不得用 `null` 绕过限制。
+快照不包含固定 `max_*` 配额、研究周期或“达到上限停止”字段。使用量字段至少包括输入/输出 token、搜索返回量及单位、查询和页面数、外部工具/API 调用、耗时、估算费用及币种、证据字节、主张数和上下文压缩次数。不可获得的使用指标写 `null` 并列入 `unavailable_metrics`。这些数据用于复现、审计和异常检查，不决定搜索是否充分；搜索停止依据 `search_coverage.yaml` 中的覆盖、反证和饱和代理。
 
 ## `decisions.yaml`
 

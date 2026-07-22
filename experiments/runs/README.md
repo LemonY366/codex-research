@@ -16,10 +16,13 @@ experiments/runs/
     ├── metrics.json           # 机器可读的最终指标
     ├── run.log                # 标准输出与错误日志（已脱敏）
     ├── metadata.json          # 数据/模型版本、种子、Git 提交、状态等
+    ├── status.json            # 归档的最终结构化任务状态
+    ├── events.jsonl           # 归档的追加式进度事件
+    ├── heartbeat.json         # 归档的最后心跳
     └── artifacts/             # 本次生成的图表、预测或小型检查点
 ```
 
-文件并非必须全部存在，但每个成功运行至少应保留命令、配置快照、最终指标和元数据；失败运行也应保留日志与失败原因。
+每个成功运行必须保留上述命令、配置、环境、脚本路径、最终指标、脱敏日志、元数据和三个进度文件；失败运行至少保留脱敏日志、失败原因和三个进度文件。运行前即创建进度记录，因此预检失败也可说明停止位置。
 
 ## API 与 GPU 资源记录
 
@@ -31,12 +34,24 @@ experiments/runs/
   "research_question_ids": ["RQ-001"],
   "success_criterion_ids": ["SC-001"],
   "decision_ids": ["DEC-001"],
+  "random_seed": 1337,
+  "data_versions": [
+    {
+      "data_id": "DATA-001",
+      "version": "<resolved version>",
+      "checksum": "<runtime checksum>",
+      "checksum_algorithm": "sha256"
+    }
+  ],
   "status": "success",
   "resources": {
     "gpu": {
       "enabled": true,
       "device": "<runtime-detected GPU model>",
       "framework": "PyTorch",
+      "pytorch_version": "<runtime version>",
+      "cuda_version": "<runtime version>",
+      "available_vram_bytes": 0,
       "purpose": "<purpose confirmed in RESEARCH.md>",
       "local_model": "<local model or checkpoint version>"
     },
@@ -65,6 +80,8 @@ experiments/runs/
 - API：请求总数、成功数、失败数、输入 token、输出 token、总耗时、估算费用及币种、限流次数和重试次数。
 - GPU：GPU 型号、CUDA 版本、PyTorch 版本、峰值显存、GPU 运行时间、训练步数和吞吐量。
 
+成功运行的 `metadata.json` 必须记录 `random_seed`（不适用时为 `null` 并在相邻说明字段写明原因）以及至少一项 `data_versions`，每项包含数据 ID、版本、校验和与算法。GPU 环境信息同时进入元数据；`metrics.json` 的 `gpu` 对象必须显式包含 `gpu_seconds`、`peak_vram_bytes` 和 `training_steps`，不适用项使用 `null` 并说明原因。
+
 指标不适用或无法安全、可靠采集时，应显式标记为 `null` 或说明未记录原因，不得伪造数值。
 
 ## 写入规则
@@ -75,6 +92,7 @@ experiments/runs/
 - 日志必须脱敏，禁止写入 API 密钥、令牌、密码、完整环境变量或敏感样本。
 - 大型数据集、原始模型权重和可重新下载的依赖不应提交到此目录；在元数据中记录其来源、版本和校验信息即可。
 - 运行结束后不要手动改写指标或配置快照。若需要重跑或修复，应创建新的运行目录。
+- 长时任务运行中先写 `workflow/tasks/<task-run-id>/`，至少每 30 秒刷新心跳；结束时将最终状态、事件与心跳归档到本目录，之后不得改写。
 - API 或 GPU 在预检、执行或收尾阶段失败时，保留已产生的脱敏日志和产物，将运行状态记为失败并写明原因；只完成部分流程不得标记为成功。
 
 ## 与其他目录的关系
