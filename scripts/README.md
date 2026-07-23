@@ -62,3 +62,7 @@ python3 -m unittest discover -s tests -v
 `transition_workflow.py` 是阶段和阶段一子状态的唯一写入入口。它先运行当前及目标状态门禁，再用锁、事务日志和原子替换同步机器状态、转换账本及 `RESEARCH.md` 投影；校验失败时不改变状态。
 
 `manage_task_progress.py` 创建、更新、查看和归档阶段二/三任务的结构化进度。实验任务写入 `workflow/tasks/`，写作会话写入 `paper/sessions/`；`list --stage stage_two|stage_three` 供 Codex 周期轮询。该工具不读取或改写两个阶段的 `TODO.md`，TODO 继续按原有任务管理方式维护。两个工具均只使用 Python 标准库。
+
+进度更新的 `--input-tokens`、`--output-tokens`、`--total-tokens` 用于 Codex 任务/阶段三写作会话，`--api-input-tokens`、`--api-output-tokens`、`--api-total-tokens` 专用于阶段二实验外部 API。输入和输出均存在时工具自动计算并核对 total；不可获得时用 `--token-unavailable FIELD:REASON` 记录原因。
+
+`manage_task_progress.py token-summary --stage phase_one|stage_two|stage_three|all` 汇总 token：阶段一读取当前资源快照，阶段二只累计 `api_*`，阶段三只累计写作会话字段。输出同时列出缺失计数的任务 ID，避免把部分合计误报为完整总量。

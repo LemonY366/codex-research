@@ -99,6 +99,11 @@ class TaskProgress:
                 "api_rate_limits": 0,
                 "input_tokens": None,
                 "output_tokens": None,
+                "total_tokens": None,
+                "api_input_tokens": None,
+                "api_output_tokens": None,
+                "api_total_tokens": None,
+                "token_unavailable_reasons": [],
                 "estimated_cost": 0.0,
                 "cost_currency": "CNY",
                 "gpu_seconds": 0.0,
@@ -131,7 +136,7 @@ class TaskProgress:
         checkpoint: str | None = None,
         blocked_reason: str | None = None,
         resume_condition: str | None = None,
-        resource_updates: dict[str, int | float | str | None] | None = None,
+        resource_updates: dict[str, Any] | None = None,
         outputs: list[str] | None = None,
     ) -> dict[str, Any]:
         """Atomically update progress and append an event."""
@@ -179,6 +184,7 @@ class TaskProgress:
         if resource_updates:
             resources = current.setdefault("resources", {})
             resources.update(resource_updates)
+            self._normalize_token_resources(resources)
         if outputs:
             merged = list(dict.fromkeys([*current.get("outputs", []), *outputs]))
             current["outputs"] = merged
@@ -187,6 +193,46 @@ class TaskProgress:
         self._append_event(next_status, message, current)
         self.heartbeat(message=message)
         return current
+
+    @staticmethod
+    def _normalize_token_resources(resources: dict[str, Any]) -> None:
+        """Validate token counters and derive totals when both parts are known."""
+
+        token_fields = (
+            "input_tokens",
+            "output_tokens",
+            "total_tokens",
+            "api_input_tokens",
+            "api_output_tokens",
+            "api_total_tokens",
+        )
+        for field in token_fields:
+            value = resources.get(field)
+            if value is not None and (
+                not isinstance(value, int) or isinstance(value, bool) or value < 0
+            ):
+                raise ValueError(f"{field} must be a non-negative integer or null")
+        for input_field, output_field, total_field in (
+            ("input_tokens", "output_tokens", "total_tokens"),
+            ("api_input_tokens", "api_output_tokens", "api_total_tokens"),
+        ):
+            input_value = resources.get(input_field)
+            output_value = resources.get(output_field)
+            if isinstance(input_value, int) and isinstance(output_value, int):
+                expected = input_value + output_value
+                supplied = resources.get(total_field)
+                if supplied is not None and supplied != expected:
+                    raise ValueError(
+                        f"{total_field} must equal {input_field} plus {output_field}"
+                    )
+                resources[total_field] = expected
+        reasons = resources.get("token_unavailable_reasons")
+        if not isinstance(reasons, list) or not all(
+            isinstance(reason, str) and ":" in reason for reason in reasons
+        ):
+            raise ValueError(
+                "token_unavailable_reasons must contain 'field: reason' strings"
+            )
 
     def heartbeat(self, *, message: str = "alive") -> None:
         """Atomically refresh the task heartbeat."""

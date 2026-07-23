@@ -77,7 +77,7 @@ experiments/runs/
 
 `metrics.json` 应按实验实际使用的资源记录可用的消耗与性能指标，并明确数值单位和统计口径：
 
-- API：请求总数、成功数、失败数、输入 token、输出 token、总耗时、估算费用及币种、限流次数和重试次数。
+- API：请求总数、成功数、失败数、输入 token、输出 token、合计 token、总耗时、估算费用及币种、限流次数和重试次数；合计必须等于输入与输出之和。
 - GPU：GPU 型号、CUDA 版本、PyTorch 版本、峰值显存、GPU 运行时间、训练步数和吞吐量。
 
 成功运行的 `metadata.json` 必须记录 `random_seed`（不适用时为 `null` 并在相邻说明字段写明原因）以及至少一项 `data_versions`，每项包含数据 ID、版本、校验和与算法。GPU 环境信息同时进入元数据；`metrics.json` 的 `gpu` 对象必须显式包含 `gpu_seconds`、`peak_vram_bytes` 和 `training_steps`，不适用项使用 `null` 并说明原因。

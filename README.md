@@ -20,7 +20,11 @@ codex
 
 ## 实验资源
 
-本模板支持由 Codex 按具体研究任务规划并生成使用本地 GPU、外部模型 API 或二者联合的实验；外部模型 API 按 OpenAI-compatible 接口处理。Codex 会根据研究问题、数据、预算与用户确认的约束动态设计两类资源的具体分工，模板不预设固定的 API 与 GPU 组合方式。
+本模板支持由 Codex 按具体研究任务规划并生成使用本地 GPU、外部模型 API 或二者联合的实验；外部模型 API 按 OpenAI-compatible 接口处理。Codex 会根据研究问题、数据、资源条件与用户确认的授权动态设计两类资源的具体分工，模板不预设固定的 API 与 GPU 组合方式。
+
+阶段二不预设或要求最大 GPU 总时长、最大 API 调用总数或最大 API 总费用。系统持续记录实际 GPU 时间、API 调用、token 和费用，用于进度展示、复现与审计；付费使用和数据外发仍须事先明确授权，GPU 不可用/OOM、API 连续失败、授权失效或用户暂停仍会触发安全停止。
+
+token 计量按来源分开：阶段一在 `research/resources.yaml` 同时记录头脑风暴 token 和阶段一累计 token；阶段二在实验任务与不可变运行中记录外部 API 输入、输出和合计 token；阶段三在每个 `paper/sessions/<session-id>/` 中记录 Codex 写作输入、输出和合计 token，并可按会话汇总阶段总量。无法从客户端或服务端取得时记录 `null` 和原因，不用 0 冒充，也不混合阶段二 API token 与阶段三 Codex token。
 
 用户负责准备本地 GPU、驱动、模型文件和真实 API 配置。API 地址、模型名称等非敏感配置可参考 `.env.example`；真实密钥继续遵循上述安全边界，不得出现在对话、代码、日志或提交中。
 
@@ -54,11 +58,11 @@ codex
 
 阶段转换不得靠手工编辑状态字段完成。`scripts/transition_workflow.py` 会先执行严格门禁，再以事务方式同步 `workflow/state.json`、`workflow/transitions.jsonl` 和 `RESEARCH.md` 投影；任一检查失败都不会留下“名义进入后一阶段”的半状态。进入阶段三还必须存在已与本地运行及 registry 对账的 `experiments/evidence_handoff.yaml`。
 
-仓库级 Skills 位于 `.agents/skills/`，其三阶段适用范围见 [三阶段 Skill 使用规则](docs/SKILL_USAGE.md)。Skill 由用户显式指定或 Codex 根据实际任务匹配，不会因为进入某个阶段而全部运行；涉及外部 OCR、依赖安装、创建新的 paper Skill 或生成 DOCX/PPTX 等可选交付物时，仍需满足对应授权、预算、隐私和阶段门禁。
+仓库级 Skills 位于 `.agents/skills/`，其三阶段适用范围见 [三阶段 Skill 使用规则](docs/SKILL_USAGE.md)。Skill 由用户显式指定或 Codex 根据实际任务匹配，不会因为进入某个阶段而全部运行；涉及外部 OCR、依赖安装、创建新的 paper Skill 或生成 DOCX/PPTX 等可选交付物时，仍需满足对应授权、付费使用、隐私和阶段门禁。
 
 ## 三阶段推荐模型与命令
 
-模型选择应服从任务难度与成本预算；以下是本项目的默认建议。可用模型和推理等级取决于账号与所用 Codex 客户端。
+模型选择应服从任务难度、资源条件与付费授权；以下是本项目的默认建议。可用模型和推理等级取决于账号与所用 Codex 客户端。
 
 ### 阶段一：调研与设计
 

@@ -13,6 +13,7 @@ from pathlib import Path
 from unittest import mock
 
 from scripts.validate_workspace import REQUIRED_SEARCH_CATEGORIES, WorkspaceValidator
+from scripts.manage_task_progress import phase_one_token_summary, task_token_summary
 from src.runtime.progress import TaskProgress
 
 
@@ -60,6 +61,17 @@ class WorkspaceValidatorTests(unittest.TestCase):
         validator.check_research_contract("阶段二：实验与分析", "进行中")
 
         self.assertIn("RESEARCH_CONFIRMATION_BLOCKING", self.codes(validator))
+
+    def test_stage_two_does_not_require_fixed_resource_caps(self) -> None:
+        self.write_research(self.synthetic_completed_research())
+        validator = WorkspaceValidator(self.root)
+
+        validator.check_research_contract("阶段二：实验与分析", "进行中")
+
+        self.assertNotIn(
+            "RESEARCH_STAGE_TWO_RESOURCE_FIELD_MISSING",
+            self.codes(validator),
+        )
 
     def test_claim_with_missing_source_is_rejected(self) -> None:
         validator = WorkspaceValidator(self.root)
@@ -244,6 +256,25 @@ class WorkspaceValidatorTests(unittest.TestCase):
         codes = self.codes(validator)
         self.assertIn("RESEARCH_BRAINSTORM_RECORD_MISSING", codes)
         self.assertIn("RESEARCH_BRAINSTORM_USER_EXIT_MISSING", codes)
+
+    def test_first_brainstorm_round_requires_token_snapshot(self) -> None:
+        template = (REPOSITORY_ROOT / "RESEARCH.md").read_text(encoding="utf-8")
+        template = template.replace(
+            "| TODO | TODO | TODO | TODO | 待分配 | TODO |",
+            "| 1 | 研究动机 | 用户希望探索稳健性 | 核心问题 | DIR-001 | 有新差异 |",
+            1,
+        )
+        self.write_research(template)
+        self.copy_empty_research_evidence()
+        validator = WorkspaceValidator(self.root)
+
+        validator.check_phase_one_evidence(
+            "阶段一：调研与设计", "进行中", phase_one_state_override="DIVERGE"
+        )
+
+        self.assertIn(
+            "RESEARCH_RESOURCE_CURRENT_SNAPSHOT_INVALID", self.codes(validator)
+        )
 
     def test_transition_history_rejects_skipped_state(self) -> None:
         validator = WorkspaceValidator(self.root)
@@ -453,6 +484,69 @@ class WorkspaceValidatorTests(unittest.TestCase):
         codes = self.codes(validator)
         self.assertNotIn("RESEARCH_RESOURCE_BUDGET_EXCEEDED", codes)
         self.assertIn("RESEARCH_RESOURCE_NULL_REASON_MISSING", codes)
+
+    def test_phase_one_records_brainstorm_and_total_tokens(self) -> None:
+        validator = WorkspaceValidator(self.root)
+        resource = self.valid_resource(
+            brainstorm_input_tokens=120,
+            brainstorm_output_tokens=80,
+            brainstorm_total_tokens=200,
+            input_tokens=500,
+            output_tokens=300,
+            total_tokens=800,
+        )
+
+        validator.validate_phase_one_resources([resource], [], [], True)
+
+        self.assertNotIn(
+            "RESEARCH_RESOURCE_TOKEN_TOTAL_MISMATCH", self.codes(validator)
+        )
+        self.assertNotIn(
+            "RESEARCH_RESOURCE_BRAINSTORM_TOKEN_EXCEEDS_TOTAL",
+            self.codes(validator),
+        )
+
+    def test_phase_one_token_summary_reports_current_snapshot(self) -> None:
+        research = self.root / "research"
+        research.mkdir()
+        (research / "resources.yaml").write_text(
+            """schema_version: 1
+snapshots:
+  - resource_id: "RES-001"
+    recorded_at: "2026-07-23T00:00:00+00:00"
+    status: "当前"
+    brainstorm_input_tokens: 20
+    brainstorm_output_tokens: 10
+    brainstorm_total_tokens: 30
+    input_tokens: 70
+    output_tokens: 30
+    total_tokens: 100
+    unavailable_metrics: []
+""",
+            encoding="utf-8",
+        )
+
+        summary = phase_one_token_summary(self.root)
+
+        self.assertEqual(30, summary["brainstorm_total_tokens"])
+        self.assertEqual(100, summary["total_tokens"])
+
+    def test_phase_one_rejects_inconsistent_token_totals(self) -> None:
+        validator = WorkspaceValidator(self.root)
+        resource = self.valid_resource(
+            brainstorm_input_tokens=120,
+            brainstorm_output_tokens=80,
+            brainstorm_total_tokens=199,
+            input_tokens=100,
+            output_tokens=100,
+            total_tokens=200,
+        )
+
+        validator.validate_phase_one_resources([resource], [], [], True)
+
+        self.assertIn(
+            "RESEARCH_RESOURCE_TOKEN_TOTAL_MISMATCH", self.codes(validator)
+        )
 
     def test_summary_size_is_not_a_phase_one_quota(self) -> None:
         summaries = self.root / "research/summaries"
@@ -695,6 +789,63 @@ class WorkspaceValidatorTests(unittest.TestCase):
         self.assertEqual("experiment sentinel\n", experiment_todo.read_text(encoding="utf-8"))
         self.assertEqual("paper sentinel\n", paper_todo.read_text(encoding="utf-8"))
 
+    def test_stage_two_and_three_token_accounts_are_separate(self) -> None:
+        stage_two_dir = self.root / "workflow/tasks/api-task-001"
+        stage_two = TaskProgress(stage_two_dir)
+        stage_two.start(
+            task_run_id="api-task-001",
+            stage="stage_two",
+            task_kind="api_generation",
+            label="synthetic API task",
+            step="generate",
+            total=1,
+            unit="batch",
+        )
+        stage_two_status = stage_two.update(
+            status_name="success",
+            completed=1,
+            resource_updates={
+                "input_tokens": 10,
+                "output_tokens": 5,
+                "api_calls": 1,
+                "api_input_tokens": 100,
+                "api_output_tokens": 40,
+            },
+        )
+        stage_three_dir = self.root / "paper/sessions/write-token-001"
+        stage_three = TaskProgress(stage_three_dir)
+        stage_three.start(
+            task_run_id="write-token-001",
+            stage="stage_three",
+            task_kind="drafting",
+            label="synthetic writing",
+            step="draft",
+            total=1,
+            unit="section",
+        )
+        stage_three_status = stage_three.update(
+            status_name="success",
+            completed=1,
+            resource_updates={"input_tokens": 70, "output_tokens": 30},
+        )
+        validator = WorkspaceValidator(self.root)
+
+        validator.check_task_progress()
+
+        self.assertEqual(15, stage_two_status["resources"]["total_tokens"])
+        self.assertEqual(140, stage_two_status["resources"]["api_total_tokens"])
+        self.assertEqual(100, stage_three_status["resources"]["total_tokens"])
+        self.assertIsNone(stage_three_status["resources"]["api_total_tokens"])
+        self.assertEqual([], validator.findings)
+        self.assertEqual(
+            140,
+            task_token_summary(self.root, "stage_two")["api_total_tokens"],
+        )
+        self.assertEqual(
+            100,
+            task_token_summary(self.root, "stage_three")["total_tokens"],
+        )
+
     def test_stale_running_task_heartbeat_is_reported(self) -> None:
         task_dir = self.root / "paper/sessions/write-001"
         progress = TaskProgress(task_dir)
@@ -918,7 +1069,7 @@ experiments:
             ("数据、baseline 与评测", "DATA-001 / BASE-001 / METRIC-001"),
             ("数据与隐私边界", "仅使用公开合成文本，不含个人信息且禁止外发"),
             ("计算与外部服务", "仅使用本地 CPU"),
-            ("阶段二执行约束与资源方案", "零 API 调用、零 GPU 时间"),
+            ("阶段二执行约束与资源方案", "记录实际用量，无固定总量上限"),
             ("Skills、依赖与授权", "不适用：使用 Python 标准库且无外部服务"),
             ("范围外事项", "不训练模型、不处理真实用户数据、不撰写论文"),
         )
@@ -1074,10 +1225,8 @@ experiments:
 
 ## 阶段二执行约束与资源方案
 
-- 最大 GPU 时间：不适用：不使用 GPU。
-- 最大 API 调用次数：0 次。
-- 最大外部 API 预算：0 元。
 - 阶段二失败停止规则：任何预检失败均停止，不生成运行证据。
+- 阶段二资源计量：记录实际 CPU 使用；不设置固定 GPU 时间、API 调用或 API 费用上限。
 
 ### 阶段一资源记录说明
 
@@ -1134,7 +1283,6 @@ experiments:
 
 - 目标：实现并运行固定关键词分类稳定性评测。
 - 验证标准：满足 SC-001 的预定报告口径。
-- 资源上限：零 API 调用和零 GPU 时间。
 
 ## 进行中
 
@@ -1326,8 +1474,12 @@ snapshots:
   - resource_id: "RES-001"
     recorded_at: "2026-07-22T10:15:00+08:00"
     status: "当前"
+    brainstorm_input_tokens: null
+    brainstorm_output_tokens: null
+    brainstorm_total_tokens: null
     input_tokens: null
     output_tokens: null
+    total_tokens: null
     search_return_size: 400
     search_return_unit: "characters"
     search_queries: 2
@@ -1340,7 +1492,7 @@ snapshots:
     evidence_file_bytes: {evidence_bytes}
     claim_count: 1
     context_compactions: 0
-    unavailable_metrics: ["input_tokens: local fixture does not report tokens", "output_tokens: local fixture does not report tokens"]
+    unavailable_metrics: ["brainstorm_input_tokens: local fixture does not report tokens", "brainstorm_output_tokens: local fixture does not report tokens", "brainstorm_total_tokens: local fixture does not report tokens", "input_tokens: local fixture does not report tokens", "output_tokens: local fixture does not report tokens", "total_tokens: local fixture does not report tokens"]
 """
         evidence_bytes = 0
         for _ in range(4):
@@ -1518,8 +1670,12 @@ decisions:
             "resource_id": "RES-001",
             "recorded_at": "2026-07-22T10:15:00+08:00",
             "status": "当前",
+            "brainstorm_input_tokens": None,
+            "brainstorm_output_tokens": None,
+            "brainstorm_total_tokens": None,
             "input_tokens": None,
             "output_tokens": None,
+            "total_tokens": None,
             "search_return_size": 0,
             "search_return_unit": "characters",
             "search_queries": 0,
@@ -1533,8 +1689,12 @@ decisions:
             "claim_count": 0,
             "context_compactions": 0,
             "unavailable_metrics": [
+                "brainstorm_input_tokens: unavailable in local fixture",
+                "brainstorm_output_tokens: unavailable in local fixture",
+                "brainstorm_total_tokens: unavailable in local fixture",
                 "input_tokens: unavailable in local fixture",
                 "output_tokens: unavailable in local fixture",
+                "total_tokens: unavailable in local fixture",
             ],
         }
         resource.update(overrides)

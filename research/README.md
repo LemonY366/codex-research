@@ -136,13 +136,13 @@ research/
 
 ## `resources.yaml`
 
-文件顶层包含 `schema_version: 1` 和 `snapshots` 列表，真实快照使用 `RES-<nnn>`。开始实际 `SEARCH` 时建立一个 `status: 当前` 的快照；阶段压缩、计量口径变化或会话交接需要冻结旧快照时，将旧记录改为 `已归档` 并新建快照。
+文件顶层包含 `schema_version: 1` 和 `snapshots` 列表，真实快照使用 `RES-<nnn>`。第一次实际头脑风暴问答完成时即建立一个 `status: 当前` 的快照，以便累计头脑风暴 token；进入 `SEARCH` 后继续在同一当前快照累计阶段一总量。阶段压缩、计量口径变化或会话交接需要冻结旧快照时，将旧记录改为 `已归档` 并新建快照。
 
-快照不包含固定 `max_*` 配额、研究周期或“达到上限停止”字段。使用量字段至少包括输入/输出 token、搜索返回量及单位、查询和页面数、外部工具/API 调用、耗时、估算费用及币种、证据字节、主张数和上下文压缩次数。不可获得的使用指标写 `null` 并列入 `unavailable_metrics`。这些数据用于复现、审计和异常检查，不决定搜索是否充分；搜索停止依据 `search_coverage.yaml` 中的覆盖、反证和饱和代理。
+快照不包含固定 `max_*` 配额、研究周期或“达到上限停止”字段。token 字段区分 `brainstorm_input_tokens`、`brainstorm_output_tokens`、`brainstorm_total_tokens` 与阶段一累计 `input_tokens`、`output_tokens`、`total_tokens`；两个 total 均等于相应输入与输出之和，头脑风暴 total 不得超过阶段一 total。其他使用量字段至少包括搜索返回量及单位、查询和页面数、外部工具/API 调用、耗时、估算费用及币种、证据字节、主张数和上下文压缩次数。不可获得的使用指标写 `null` 并列入 `unavailable_metrics`。这些数据用于复现、审计和异常检查，不决定搜索是否充分；搜索停止依据 `search_coverage.yaml` 中的覆盖、反证和饱和代理。
 
 ## `decisions.yaml`
 
-文件顶层包含 `schema_version: 1` 和 `decisions` 列表。只记录会改变研究目标、候选方向选择、范围、数据、baseline、指标、预算、授权或阶段状态的持久决策，使用 `DEC-<nnn>`；措辞调整和普通对话不登记。选定最终方向的决策必须把其他 `DIR-<nnn>` 候选及其否决原因分别写入 `alternatives` 和 `rejection_reasons`，不能只记录获选方案。
+文件顶层包含 `schema_version: 1` 和 `decisions` 列表。只记录会改变研究目标、候选方向选择、范围、数据、baseline、指标、资源方案、付费/外发授权或阶段状态的持久决策，使用 `DEC-<nnn>`；措辞调整和普通对话不登记。选定最终方向的决策必须把其他 `DIR-<nnn>` 候选及其否决原因分别写入 `alternatives` 和 `rejection_reasons`，不能只记录获选方案。
 
 每个决策必须记录：
 

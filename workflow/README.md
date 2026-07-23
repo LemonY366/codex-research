@@ -29,7 +29,7 @@ uv run python scripts/transition_workflow.py --to DIVERGE --reason "用户提供
 
 ## 阶段二与阶段三任务状态
 
-阶段二实验和阶段三写作共用 `src/runtime/progress.py`。活动任务在 `workflow/tasks/<task-run-id>/` 保存：
+阶段二实验和阶段三写作共用 `src/runtime/progress.py`。阶段二活动任务写入 `workflow/tasks/<task-run-id>/`，阶段三写作会话写入 `paper/sessions/<session-id>/`；两者均保存：
 
 - `status.json`：当前步骤、完成量、资源用量、阻塞和恢复条件；
 - `events.jsonl`：追加式进度、检查点、警告和错误；
@@ -38,5 +38,7 @@ uv run python scripts/transition_workflow.py --to DIVERGE --reason "用户提供
 阶段二最终状态快照应复制到对应 `experiments/runs/<run-id>/`；阶段三最终状态、主张/引用检查与输出 manifest 应进入 `paper/sessions/<session-id>/`。活动任务默认是本地运行状态，不作为论文证据。
 
 运行中的脚本至少每 30 秒更新心跳。Codex 应每 30–60 秒轮询并向用户报告实验/章节、seed 或写作步骤、完成量、资源消耗、最近心跳、已保存检查点和阻塞原因。百分比必须来自明确的完成数与总数，不能按生成字数猜测。
+
+`status.json.resources` 将 Codex 任务或写作会话 token 记为 `input_tokens`、`output_tokens`、`total_tokens`，将阶段二实验调用外部模型 API 的 token 单独记为 `api_input_tokens`、`api_output_tokens`、`api_total_tokens`。阶段三以第一组字段作为写作 token；阶段二 API 统计只使用第二组，禁止混计。无法取得时在 `token_unavailable_reasons` 中写 `field: reason`，不得用 0 表示未知。
 
 实时进度系统不得自动改写 `experiments/TODO.md` 或 `paper/TODO.md`。两个 TODO 文件继续按原有方式由 Codex 在任务规划、正式状态变化、阻塞处理和完成交接时维护；每次心跳、step、sample、epoch 或百分比变化只写上述实时状态文件。TODO 与实时状态关注不同层级，不要求逐事件逐字段相同。

@@ -257,8 +257,12 @@ RESOURCE_REQUIRED_FIELDS = {
     "resource_id",
     "recorded_at",
     "status",
+    "brainstorm_input_tokens",
+    "brainstorm_output_tokens",
+    "brainstorm_total_tokens",
     "input_tokens",
     "output_tokens",
+    "total_tokens",
     "search_return_size",
     "search_return_unit",
     "search_queries",
@@ -1878,12 +1882,7 @@ class WorkspaceValidator:
                     f"{row.get('成功标准 ID')} may not define a verifiable rule or threshold",
                 )
 
-        for label in (
-            "最大 GPU 时间",
-            "最大 API 调用次数",
-            "最大外部 API 预算",
-            "阶段二失败停止规则",
-        ):
+        for label in ("阶段二失败停止规则",):
             value = self.extract_field(text, label)
             if value is None or value in PLACEHOLDER_CELLS or value.startswith("TODO"):
                 self.add(
@@ -2228,6 +2227,17 @@ class WorkspaceValidator:
             and PHASE_ONE_STATE_ORDER.index(phase_one_state)
             >= PHASE_ONE_STATE_ORDER.index("SEARCH")
         ) or transition_ready
+        brainstorm_started = any(
+            "轮次" in headers
+            and "Codex 主动问题焦点" in headers
+            and any(
+                row.get("轮次", "") not in PLACEHOLDER_CELLS
+                and not row.get("轮次", "").startswith("TODO")
+                for row in rows
+            )
+            for headers, rows in research_tables
+        )
+        resource_required = search_required or brainstorm_started
 
         sources = self.read_flat_yaml_registry(
             "research/sources.yaml", "sources", "source_id"
@@ -2290,7 +2300,7 @@ class WorkspaceValidator:
             resources,
             search_entries,
             claims,
-            search_required,
+            resource_required,
         )
         self.check_phase_one_evidence_quality(
             sources,
@@ -3705,8 +3715,12 @@ class WorkspaceValidator:
                     f"{resource_id} recorded_at must be explicit",
                 )
             usage_fields = (
+                "brainstorm_input_tokens",
+                "brainstorm_output_tokens",
+                "brainstorm_total_tokens",
                 "input_tokens",
                 "output_tokens",
+                "total_tokens",
                 "search_return_size",
                 "search_queries",
                 "search_pages",
@@ -3752,6 +3766,7 @@ class WorkspaceValidator:
                         relative,
                         f"{resource_id} {field} must be non-negative or null",
                     )
+            self.validate_token_totals(entry, resource_id, relative)
             if entry.get("search_return_unit") not in VALID_RETURN_SIZE_UNITS:
                 self.add(
                     "ERROR",
@@ -3795,6 +3810,50 @@ class WorkspaceValidator:
                 "RESEARCH_RESOURCE_EVIDENCE_BYTES_MISMATCH",
                 relative,
                 "recorded evidence_file_bytes does not match current evidence files",
+            )
+
+    def validate_token_totals(
+        self, entry: dict[str, object], resource_id: str, relative: str
+    ) -> None:
+        """Check phase-one and brainstorm token totals when counts are available."""
+
+        groups = (
+            ("input_tokens", "output_tokens", "total_tokens", "phase one"),
+            (
+                "brainstorm_input_tokens",
+                "brainstorm_output_tokens",
+                "brainstorm_total_tokens",
+                "brainstorm",
+            ),
+        )
+        for input_field, output_field, total_field, label in groups:
+            input_value = entry.get(input_field)
+            output_value = entry.get(output_field)
+            total_value = entry.get(total_field)
+            if all(
+                isinstance(value, (int, float)) and not isinstance(value, bool)
+                for value in (input_value, output_value, total_value)
+            ) and total_value != input_value + output_value:
+                self.add(
+                    "ERROR",
+                    "RESEARCH_RESOURCE_TOKEN_TOTAL_MISMATCH",
+                    relative,
+                    f"{resource_id} {label} total tokens must equal input plus output",
+                )
+        brainstorm_total = entry.get("brainstorm_total_tokens")
+        phase_total = entry.get("total_tokens")
+        if (
+            isinstance(brainstorm_total, (int, float))
+            and not isinstance(brainstorm_total, bool)
+            and isinstance(phase_total, (int, float))
+            and not isinstance(phase_total, bool)
+            and brainstorm_total > phase_total
+        ):
+            self.add(
+                "ERROR",
+                "RESEARCH_RESOURCE_BRAINSTORM_TOKEN_EXCEEDS_TOTAL",
+                relative,
+                f"{resource_id} brainstorm tokens cannot exceed total phase-one tokens",
             )
 
     def phase_one_evidence_bytes(self) -> int:
@@ -4480,6 +4539,7 @@ class WorkspaceValidator:
                 "rate_limits",
                 "input_tokens",
                 "output_tokens",
+                "total_tokens",
                 "elapsed_seconds",
                 "estimated_cost",
                 "cost_currency",
@@ -4492,6 +4552,19 @@ class WorkspaceValidator:
                     "RUN_API_USAGE_MISSING",
                     relative,
                     "API metrics must record calls, outcomes, retries, tokens, time, and cost",
+                )
+            elif all(
+                isinstance(api_metrics.get(field), int)
+                and not isinstance(api_metrics.get(field), bool)
+                for field in ("input_tokens", "output_tokens", "total_tokens")
+            ) and api_metrics["total_tokens"] != (
+                api_metrics["input_tokens"] + api_metrics["output_tokens"]
+            ):
+                self.add(
+                    "ERROR",
+                    "RUN_API_TOKEN_TOTAL_MISMATCH",
+                    relative,
+                    "API total_tokens must equal input_tokens plus output_tokens",
                 )
 
     def check_experiment_reconciliation(self) -> None:
@@ -4797,6 +4870,7 @@ class WorkspaceValidator:
                         relative,
                         "failed task must record its failure reason",
                     )
+                self.validate_task_token_resources(status, relative)
                 completed = status.get("completed")
                 total = status.get("total")
                 if not isinstance(completed, int) or completed < 0:
@@ -4886,6 +4960,107 @@ class WorkspaceValidator:
                             relative,
                             f"events.jsonl line {line_number} has the wrong task_run_id",
                         )
+
+    def validate_task_token_resources(
+        self, status: dict[str, object], relative: str
+    ) -> None:
+        """Validate Codex-session and experiment-API token accounting."""
+
+        resources = status.get("resources")
+        if not isinstance(resources, dict):
+            self.add(
+                "ERROR",
+                "TASK_RESOURCES_INVALID",
+                relative,
+                "task status must contain a resources object",
+            )
+            return
+        token_fields = (
+            "input_tokens",
+            "output_tokens",
+            "total_tokens",
+            "api_input_tokens",
+            "api_output_tokens",
+            "api_total_tokens",
+            "token_unavailable_reasons",
+        )
+        missing = [field for field in token_fields if field not in resources]
+        if missing:
+            self.add(
+                "ERROR",
+                "TASK_TOKEN_FIELDS_MISSING",
+                relative,
+                f"task resources are missing: {', '.join(missing)}",
+            )
+        for field in token_fields[:-1]:
+            value = resources.get(field)
+            if value is not None and (
+                not isinstance(value, int) or isinstance(value, bool) or value < 0
+            ):
+                self.add(
+                    "ERROR",
+                    "TASK_TOKEN_VALUE_INVALID",
+                    relative,
+                    f"{field} must be a non-negative integer or null",
+                )
+        reasons = resources.get("token_unavailable_reasons")
+        if not isinstance(reasons, list) or not all(
+            isinstance(reason, str) and ":" in reason for reason in reasons
+        ):
+            self.add(
+                "ERROR",
+                "TASK_TOKEN_UNAVAILABLE_REASONS_INVALID",
+                relative,
+                "token_unavailable_reasons must use field: reason strings",
+            )
+            unavailable_names: set[str] = set()
+        else:
+            unavailable_names = {reason.split(":", 1)[0] for reason in reasons}
+        for input_field, output_field, total_field in (
+            ("input_tokens", "output_tokens", "total_tokens"),
+            ("api_input_tokens", "api_output_tokens", "api_total_tokens"),
+        ):
+            input_value = resources.get(input_field)
+            output_value = resources.get(output_field)
+            total_value = resources.get(total_field)
+            if (
+                isinstance(input_value, int)
+                and not isinstance(input_value, bool)
+                and isinstance(output_value, int)
+                and not isinstance(output_value, bool)
+                and total_value != input_value + output_value
+            ):
+                self.add(
+                    "ERROR",
+                    "TASK_TOKEN_TOTAL_MISMATCH",
+                    relative,
+                    f"{total_field} must equal input plus output tokens",
+                )
+        if status.get("status") != "success":
+            return
+        if status.get("stage") == "stage_three" and resources.get(
+            "total_tokens"
+        ) is None and "total_tokens" not in unavailable_names:
+            self.add(
+                "ERROR",
+                "STAGE_THREE_TOKEN_TOTAL_MISSING",
+                relative,
+                "successful writing session must record total_tokens or an unavailable reason",
+            )
+        api_calls = resources.get("api_calls")
+        if (
+            status.get("stage") == "stage_two"
+            and isinstance(api_calls, int)
+            and api_calls > 0
+            and resources.get("api_total_tokens") is None
+            and "api_total_tokens" not in unavailable_names
+        ):
+            self.add(
+                "ERROR",
+                "STAGE_TWO_API_TOKEN_TOTAL_MISSING",
+                relative,
+                "API-using experiment task must record api_total_tokens or an unavailable reason",
+            )
 
     def check_stage_two_handoff(self, *, required: bool) -> None:
         """Require a reconciled evidence handoff before stage three."""
