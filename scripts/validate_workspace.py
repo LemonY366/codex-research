@@ -114,11 +114,11 @@ BLOCKING_CONFIRMATION_STATUSES = {"暂定", "待确认", "存在冲突"}
 REQUIRED_CONTRACT_FIELDS = {
     "最终研究方向",
     "数据、baseline、指标与成功标准",
-    "阶段二实验与资源方案",
+    "阶段二实验与执行方案",
     "数据、许可与隐私边界",
     "范围边界",
 }
-PLACEHOLDER_CELLS = {"", "-", "TODO", "待分配"}
+PLACEHOLDER_CELLS = {"", "-", "TODO", "待分配", "待形成", "待设计"}
 RESEARCH_ID_DEFINITIONS = (
     ("未决问题 ID", "问题", re.compile(r"OPEN-\d{3}")),
     ("候选方向 ID", "核心问题", re.compile(r"DIR-\d{3}")),

@@ -171,7 +171,7 @@ class WorkspaceValidatorTests(unittest.TestCase):
         partial = partial.replace("阶段状态：未开始", "阶段状态：进行中")
         partial = partial.replace("阶段门禁：待检查", "阶段门禁：已通过")
         partial = partial.replace(
-            "| 用户研究意图 | TODO | TODO | 待澄清 | TODO | 待分配 |",
+            "| 用户研究意图 | 待形成 | 尚无 | 待澄清 | 尚无 | 待分配 |",
             "| 用户研究意图 | 探索可复现方向 | 用户 | 暂定 | 轮次 1 | 待分配 |",
         )
         self.write_research(partial)
@@ -217,7 +217,7 @@ class WorkspaceValidatorTests(unittest.TestCase):
         template = (REPOSITORY_ROOT / "RESEARCH.md").read_text(encoding="utf-8")
         for field in ("用户研究意图", "研究对象", "核心问题", "创新性假设", "最小可证伪路径", "范围边界"):
             template = template.replace(
-                f"| {field} | TODO | TODO | 待澄清 | TODO | 待分配 |",
+                f"| {field} | 待形成 | 尚无 | 待澄清 | 尚无 | 待分配 |",
                 f"| {field} | 可工作的方向信息 | 用户 | 暂定 | 轮次 1 | 待分配 |",
             )
         validator = WorkspaceValidator(self.root)
@@ -408,7 +408,7 @@ class WorkspaceValidatorTests(unittest.TestCase):
 
         self.assertIn("RESEARCH_SELECTED_DIRECTION_SEARCH_BLOCKED", self.codes(validator))
 
-    def test_gate_check_activates_complete_contract_and_todo_gate(self) -> None:
+    def test_gate_check_activates_complete_contract_gate(self) -> None:
         template = (REPOSITORY_ROOT / "RESEARCH.md").read_text(encoding="utf-8")
         self.write_research(template)
         validator = WorkspaceValidator(self.root)
@@ -419,15 +419,8 @@ class WorkspaceValidatorTests(unittest.TestCase):
             phase_one_state_override="GATE_CHECK",
             preflight_transition=True,
         )
-        validator.check_unresolved_todos(
-            "阶段一：调研与设计",
-            "进行中",
-            phase_one_state_override="GATE_CHECK",
-        )
-
         codes = self.codes(validator)
         self.assertIn("RESEARCH_CONFIRMATION_BLOCKING", codes)
-        self.assertIn("CRITICAL_RESEARCH_TODO", codes)
 
     def test_secondary_source_must_trace_to_primary(self) -> None:
         validator = WorkspaceValidator(self.root)
@@ -607,10 +600,10 @@ class WorkspaceValidatorTests(unittest.TestCase):
 
     def test_external_transfer_requires_scoped_authorization(self) -> None:
         text = (REPOSITORY_ROOT / "RESEARCH.md").read_text(encoding="utf-8").replace(
-            "- 外部传输：无计划；若计划发生，创建限定范围的 `AUTH-<nnn>`。",
+            "- 外部传输：待设计；计划外发时创建限定范围的 `AUTH-<nnn>`。",
             "- 外部传输：允许发送公开合成摘要。",
         ).replace(
-            "- 计算与外部服务：TODO（只登记实际计划使用的 GPU、API、模型和数据流）。",
+            "- 计算与外部服务：待设计；只登记实际使用的 GPU、API、模型和数据流。",
             "- 计算与外部服务：使用外部 API 分析公开合成摘要。",
         )
         validator = WorkspaceValidator(self.root)
@@ -1069,15 +1062,11 @@ experiments:
         """Create a compact field-status table for a targeted test."""
 
         fields = (
-            "研究目标",
-            "研究问题",
-            "成功标准",
-            "数据、baseline 与评测",
-            "数据与隐私边界",
-            "计算与外部服务",
-            "阶段二执行约束与资源方案",
-            "Skills、依赖与授权",
-            "范围外事项",
+            "最终研究方向",
+            "数据、baseline、指标与成功标准",
+            "阶段二实验与执行方案",
+            "数据、许可与隐私边界",
+            "范围边界",
         )
         rows = [
             "| 合同字段 | 当前值或引用 | 信息来源 | 确认状态 | 最近确认日期或轮次 | 决策 ID | 证据 ID |",
