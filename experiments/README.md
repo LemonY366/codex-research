@@ -37,5 +37,3 @@ experiments/
 每个下载、生成、训练或评测长任务在执行前使用 `scripts/manage_task_progress.py` 创建 `../workflow/tasks/<task-run-id>/`。实验脚本按实际 sample、epoch、step 或 seed 更新完成数、资源消耗和检查点，并至少每 30 秒刷新心跳；Codex 通过 `list --stage stage_two` 轮询并每 30–60 秒向用户报告。任务结束后将三个进度文件归档到对应不可变 run 目录。
 
 这些实时写入不投影到 `TODO.md`。只有任务规划改变、任务形成持久状态、出现需要记录的阻塞或任务完成交接时，Codex 才按原有格式维护 `TODO.md`。
-
-阶段二外部模型 API token 使用任务状态中的 `api_input_tokens`、`api_output_tokens` 和 `api_total_tokens`，并在成功运行的 `metrics.json.api` 中保存对应输入、输出和合计值。通用的 `input_tokens`/`output_tokens` 属于 Codex 任务会话计量，不得当作实验 API 消耗。

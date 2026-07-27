@@ -13,7 +13,6 @@ from pathlib import Path
 from unittest import mock
 
 from scripts.validate_workspace import REQUIRED_SEARCH_CATEGORIES, WorkspaceValidator
-from scripts.manage_task_progress import phase_one_token_summary, task_token_summary
 from src.runtime.progress import TaskProgress
 
 
@@ -62,16 +61,13 @@ class WorkspaceValidatorTests(unittest.TestCase):
 
         self.assertIn("RESEARCH_CONFIRMATION_BLOCKING", self.codes(validator))
 
-    def test_stage_two_does_not_require_fixed_resource_caps(self) -> None:
-        self.write_research(self.synthetic_completed_research())
+    def test_stage_two_requires_failure_rule(self) -> None:
+        self.write_research((REPOSITORY_ROOT / "RESEARCH.md").read_text(encoding="utf-8"))
         validator = WorkspaceValidator(self.root)
 
         validator.check_research_contract("阶段二：实验与分析", "进行中")
 
-        self.assertNotIn(
-            "RESEARCH_STAGE_TWO_RESOURCE_FIELD_MISSING",
-            self.codes(validator),
-        )
+        self.assertIn("RESEARCH_STAGE_TWO_STOP_RULE_MISSING", self.codes(validator))
 
     def test_claim_with_missing_source_is_rejected(self) -> None:
         validator = WorkspaceValidator(self.root)
@@ -174,24 +170,17 @@ class WorkspaceValidatorTests(unittest.TestCase):
         partial = template.replace("阶段一子状态：INTAKE", "阶段一子状态：DIVERGE")
         partial = partial.replace("阶段状态：未开始", "阶段状态：进行中")
         partial = partial.replace("阶段门禁：待检查", "阶段门禁：已通过")
-        intake_values = {
-            "用户研究意图": "探索一个可复现的合成研究方向",
-        }
-        for index, (field, value) in enumerate(intake_values.items(), start=1):
-            old = f"| {index} | {field} | TODO | TODO | 待澄清 | TODO | 待分配 |"
-            new = f"| {index} | {field} | {value} | 用户 | 暂定 | 轮次 1 | 待分配 |"
-            partial = partial.replace(old, new)
         partial = partial.replace(
-            "| 待分配 | TODO | TODO | TODO | TODO | TODO | 待分配 |",
-            "| TRANS-001 | 2026-07-22 | INTAKE | DIVERGE | 已通过 | 用户提供研究种子 | DEC-001 |",
+            "| 用户研究意图 | TODO | TODO | 待澄清 | TODO | 待分配 |",
+            "| 用户研究意图 | 探索可复现方向 | 用户 | 暂定 | 轮次 1 | 待分配 |",
         )
         self.write_research(partial)
         self.copy_empty_research_evidence()
         validator = WorkspaceValidator(self.root)
 
-        phase, status = validator.check_stage_state()
-        validator.check_research_contract(phase, status)
-        validator.check_phase_one_evidence(phase, status)
+        validator.check_requirement_intake(
+            validator.parse_markdown_tables(partial), "DIVERGE", False
+        )
 
         errors = [item for item in validator.findings if item.severity == "ERROR"]
         self.assertEqual([], errors)
@@ -205,37 +194,31 @@ class WorkspaceValidatorTests(unittest.TestCase):
         validator.check_research_contract("阶段一：调研与设计", "进行中")
 
         codes = self.codes(validator)
-        self.assertIn("RESEARCH_INTAKE_INCOMPLETE_FOR_DRAFT", codes)
+        self.assertIn("RESEARCH_INTAKE_INCOMPLETE_FOR_SEARCH", codes)
         self.assertIn("RESEARCH_DIRECTION_CANDIDATES_INSUFFICIENT", codes)
 
-    def test_search_requires_two_compared_candidate_directions(self) -> None:
-        text = self.synthetic_completed_research()
+    def test_search_allows_one_formal_direction(self) -> None:
         validator = WorkspaceValidator(self.root)
-        candidate_tables = [
-            (headers, rows[:1])
-            for headers, rows in validator.parse_markdown_tables(text)
-            if "候选方向 ID" in headers
-        ]
+        headers = ["候选方向 ID", "核心问题", "创新性假设", "最小验证路径", "主要风险", "状态", "选择、合并或否决理由", "决策 ID"]
+        rows = [{"候选方向 ID": "DIR-001", "核心问题": "问题", "创新性假设": "假设", "最小验证路径": "实验", "主要风险": "重合", "状态": "入围", "选择、合并或否决理由": "待验证", "决策 ID": "待分配"}]
 
         validator.check_candidate_directions(
-            candidate_tables,
+            [(headers, rows)],
             "SEARCH",
             False,
-            {"研究问题 ID": {"RQ-001"}},
+            {},
         )
 
-        self.assertIn(
+        self.assertNotIn(
             "RESEARCH_DIRECTION_CANDIDATES_INSUFFICIENT", self.codes(validator)
         )
 
-    def test_search_allows_data_and_resource_intake_to_remain_pending(self) -> None:
+    def test_search_requires_all_direction_fields_but_not_execution_fields(self) -> None:
         template = (REPOSITORY_ROOT / "RESEARCH.md").read_text(encoding="utf-8")
-        for index, field in enumerate(
-            ("用户研究意图", "研究对象", "核心问题", "预期贡献"), start=1
-        ):
+        for field in ("用户研究意图", "研究对象", "核心问题", "创新性假设", "最小可证伪路径", "范围边界"):
             template = template.replace(
-                f"| {index} | {field} | TODO | TODO | 待澄清 | TODO | 待分配 |",
-                f"| {index} | {field} | 可工作的方向信息 | 用户 | 暂定 | 轮次 1 | 待分配 |",
+                f"| {field} | TODO | TODO | 待澄清 | TODO | 待分配 |",
+                f"| {field} | 可工作的方向信息 | 用户 | 暂定 | 轮次 1 | 待分配 |",
             )
         validator = WorkspaceValidator(self.root)
         validator.check_requirement_intake(
@@ -246,7 +229,7 @@ class WorkspaceValidatorTests(unittest.TestCase):
             "RESEARCH_INTAKE_INCOMPLETE_FOR_SEARCH", self.codes(validator)
         )
 
-    def test_search_requires_brainstorm_record_and_user_exit(self) -> None:
+    def test_search_requires_interaction_record_and_alternative_check(self) -> None:
         template = (REPOSITORY_ROOT / "RESEARCH.md").read_text(encoding="utf-8")
         validator = WorkspaceValidator(self.root)
         tables = validator.parse_markdown_tables(template)
@@ -255,26 +238,7 @@ class WorkspaceValidatorTests(unittest.TestCase):
 
         codes = self.codes(validator)
         self.assertIn("RESEARCH_BRAINSTORM_RECORD_MISSING", codes)
-        self.assertIn("RESEARCH_BRAINSTORM_USER_EXIT_MISSING", codes)
-
-    def test_first_brainstorm_round_requires_token_snapshot(self) -> None:
-        template = (REPOSITORY_ROOT / "RESEARCH.md").read_text(encoding="utf-8")
-        template = template.replace(
-            "| TODO | TODO | TODO | TODO | 待分配 | TODO |",
-            "| 1 | 研究动机 | 用户希望探索稳健性 | 核心问题 | DIR-001 | 有新差异 |",
-            1,
-        )
-        self.write_research(template)
-        self.copy_empty_research_evidence()
-        validator = WorkspaceValidator(self.root)
-
-        validator.check_phase_one_evidence(
-            "阶段一：调研与设计", "进行中", phase_one_state_override="DIVERGE"
-        )
-
-        self.assertIn(
-            "RESEARCH_RESOURCE_CURRENT_SNAPSHOT_INVALID", self.codes(validator)
-        )
+        self.assertIn("RESEARCH_ALTERNATIVE_DIRECTION_CHECK_MISSING", codes)
 
     def test_transition_history_rejects_skipped_state(self) -> None:
         validator = WorkspaceValidator(self.root)
@@ -340,17 +304,18 @@ class WorkspaceValidatorTests(unittest.TestCase):
         )
 
     def test_multiple_final_directions_are_rejected(self) -> None:
-        text = self.synthetic_completed_research().replace(
-            "| 不适用 | 已否决 | 引入不必要的外发、费用和不可控版本风险 |",
-            "| RQ-001 | 已选定 | 引入不必要的外发、费用和不可控版本风险 |",
-        )
         validator = WorkspaceValidator(self.root)
+        headers = ["候选方向 ID", "核心问题", "创新性假设", "最小验证路径", "主要风险", "状态", "选择、合并或否决理由", "决策 ID"]
+        rows = [
+            {"候选方向 ID": "DIR-001", "核心问题": "问题一", "创新性假设": "假设一", "最小验证路径": "实验一", "主要风险": "风险一", "状态": "已选定", "选择、合并或否决理由": "选择", "决策 ID": "DEC-001"},
+            {"候选方向 ID": "DIR-002", "核心问题": "问题二", "创新性假设": "假设二", "最小验证路径": "实验二", "主要风险": "风险二", "状态": "已选定", "选择、合并或否决理由": "选择", "决策 ID": "DEC-001"},
+        ]
 
         validator.check_candidate_directions(
-            validator.parse_markdown_tables(text),
+            [(headers, rows)],
             "GATE_CHECK",
             True,
-            {"研究问题 ID": {"RQ-001"}},
+            {},
         )
 
         self.assertIn("RESEARCH_DIRECTION_FINAL_NOT_UNIQUE", self.codes(validator))
@@ -383,6 +348,86 @@ class WorkspaceValidatorTests(unittest.TestCase):
         self.assertIn("RESEARCH_SEARCH_STOP_COVERAGE_INCOMPLETE", codes)
         self.assertIn("RESEARCH_SEARCH_STOP_PROXY_INCOMPLETE", codes)
         self.assertIn("RESEARCH_SEARCH_STOP_REASON_INVALID", codes)
+
+    def test_feasibility_blocker_can_stop_without_fabricated_saturation(self) -> None:
+        validator = WorkspaceValidator(self.root)
+        coverage = self.valid_search_coverage(
+            coverage={
+                category: "部分覆盖" for category in REQUIRED_SEARCH_CATEGORIES
+            },
+            coverage_notes={
+                category: "许可证据显示无法在计划范围内使用"
+                for category in REQUIRED_SEARCH_CATEGORIES
+            },
+            covered_languages=["zh"],
+            covered_platforms=[],
+            independent_source_yield_history=[1.0],
+            new_method_categories_history=[1],
+            key_questions_covered=False,
+            counterevidence_completed=False,
+            citation_tracking_completed=False,
+            uncovered_scope=["英文数据库", "后续方法搜索"],
+            stop_type="可行性阻断",
+            blocking_issue="数据许可证禁止计划用途",
+            blocking_source_ids=["SRC-001"],
+            stop_reason="已核验的许可证限制阻止该方向",
+        )
+
+        validator.validate_search_coverage(
+            [coverage],
+            {"DIR-001"},
+            {"RQ-001"},
+            {"QRY-001"},
+            {"SRC-001"},
+            True,
+            True,
+            set(),
+        )
+
+        self.assertEqual([], [item for item in validator.findings if item.severity == "ERROR"])
+
+    def test_selected_direction_cannot_keep_feasibility_blocker(self) -> None:
+        validator = WorkspaceValidator(self.root)
+        coverage = self.valid_search_coverage(
+            stop_type="可行性阻断",
+            blocking_issue="缺少可用许可",
+            blocking_source_ids=["SRC-001"],
+            uncovered_scope=["因许可阻断未继续搜索"],
+        )
+
+        validator.validate_search_coverage(
+            [coverage],
+            {"DIR-001"},
+            {"RQ-001"},
+            {"QRY-001"},
+            {"SRC-001"},
+            True,
+            True,
+            {"DIR-001"},
+        )
+
+        self.assertIn("RESEARCH_SELECTED_DIRECTION_SEARCH_BLOCKED", self.codes(validator))
+
+    def test_gate_check_activates_complete_contract_and_todo_gate(self) -> None:
+        template = (REPOSITORY_ROOT / "RESEARCH.md").read_text(encoding="utf-8")
+        self.write_research(template)
+        validator = WorkspaceValidator(self.root)
+
+        validator.check_research_contract(
+            "阶段一：调研与设计",
+            "进行中",
+            phase_one_state_override="GATE_CHECK",
+            preflight_transition=True,
+        )
+        validator.check_unresolved_todos(
+            "阶段一：调研与设计",
+            "进行中",
+            phase_one_state_override="GATE_CHECK",
+        )
+
+        codes = self.codes(validator)
+        self.assertIn("RESEARCH_CONFIRMATION_BLOCKING", codes)
+        self.assertIn("CRITICAL_RESEARCH_TODO", codes)
 
     def test_secondary_source_must_trace_to_primary(self) -> None:
         validator = WorkspaceValidator(self.root)
@@ -469,96 +514,6 @@ class WorkspaceValidatorTests(unittest.TestCase):
         codes = self.codes(validator)
         self.assertIn("RESEARCH_CLAIM_CONFLICT_DETAIL_MISSING", codes)
         self.assertIn("RESEARCH_CLAIM_ADVERSE_EVIDENCE_NOT_RETAINED", codes)
-
-    def test_resource_quota_is_ignored_but_unexplained_null_is_rejected(self) -> None:
-        validator = WorkspaceValidator(self.root)
-        resource = self.valid_resource(
-            max_search_queries=2,
-            search_queries=3,
-            input_tokens=None,
-            unavailable_metrics=[],
-        )
-
-        validator.validate_phase_one_resources([resource], [], [], True)
-
-        codes = self.codes(validator)
-        self.assertNotIn("RESEARCH_RESOURCE_BUDGET_EXCEEDED", codes)
-        self.assertIn("RESEARCH_RESOURCE_NULL_REASON_MISSING", codes)
-
-    def test_phase_one_records_brainstorm_and_total_tokens(self) -> None:
-        validator = WorkspaceValidator(self.root)
-        resource = self.valid_resource(
-            brainstorm_input_tokens=120,
-            brainstorm_output_tokens=80,
-            brainstorm_total_tokens=200,
-            input_tokens=500,
-            output_tokens=300,
-            total_tokens=800,
-        )
-
-        validator.validate_phase_one_resources([resource], [], [], True)
-
-        self.assertNotIn(
-            "RESEARCH_RESOURCE_TOKEN_TOTAL_MISMATCH", self.codes(validator)
-        )
-        self.assertNotIn(
-            "RESEARCH_RESOURCE_BRAINSTORM_TOKEN_EXCEEDS_TOTAL",
-            self.codes(validator),
-        )
-
-    def test_phase_one_token_summary_reports_current_snapshot(self) -> None:
-        research = self.root / "research"
-        research.mkdir()
-        (research / "resources.yaml").write_text(
-            """schema_version: 1
-snapshots:
-  - resource_id: "RES-001"
-    recorded_at: "2026-07-23T00:00:00+00:00"
-    status: "当前"
-    brainstorm_input_tokens: 20
-    brainstorm_output_tokens: 10
-    brainstorm_total_tokens: 30
-    input_tokens: 70
-    output_tokens: 30
-    total_tokens: 100
-    unavailable_metrics: []
-""",
-            encoding="utf-8",
-        )
-
-        summary = phase_one_token_summary(self.root)
-
-        self.assertEqual(30, summary["brainstorm_total_tokens"])
-        self.assertEqual(100, summary["total_tokens"])
-
-    def test_phase_one_rejects_inconsistent_token_totals(self) -> None:
-        validator = WorkspaceValidator(self.root)
-        resource = self.valid_resource(
-            brainstorm_input_tokens=120,
-            brainstorm_output_tokens=80,
-            brainstorm_total_tokens=199,
-            input_tokens=100,
-            output_tokens=100,
-            total_tokens=200,
-        )
-
-        validator.validate_phase_one_resources([resource], [], [], True)
-
-        self.assertIn(
-            "RESEARCH_RESOURCE_TOKEN_TOTAL_MISMATCH", self.codes(validator)
-        )
-
-    def test_summary_size_is_not_a_phase_one_quota(self) -> None:
-        summaries = self.root / "research/summaries"
-        summaries.mkdir(parents=True)
-        (summaries / "RQ-001.md").write_text("123456", encoding="utf-8")
-        validator = WorkspaceValidator(self.root)
-
-        validator.validate_phase_one_resources(
-            [self.valid_resource(max_summary_chars=5)], [], [], True
-        )
-
-        self.assertNotIn("RESEARCH_SUMMARY_SIZE_EXCEEDED", self.codes(validator))
 
     def test_search_log_emits_rotation_warning_at_threshold(self) -> None:
         research = self.root / "research"
@@ -651,21 +606,12 @@ snapshots:
         )
 
     def test_external_transfer_requires_scoped_authorization(self) -> None:
-        text = self.synthetic_completed_research().replace(
-            "- 外部模型 API：不适用：合成演练只使用本地 CPU。",
-            "- 外部模型 API：OpenAI-compatible 测试接口。",
+        text = (REPOSITORY_ROOT / "RESEARCH.md").read_text(encoding="utf-8").replace(
+            "- 外部传输：无计划；若计划发生，创建限定范围的 `AUTH-<nnn>`。",
+            "- 外部传输：允许发送公开合成摘要。",
         ).replace(
-            "- API 用途：不适用：不调用外部服务。",
-            "- API 用途：分析公开合成摘要。",
-        ).replace(
-            "- API 模型：不适用：不调用外部服务。",
-            "- API 模型：synthetic-model。",
-        ).replace(
-            "- API 与 GPU 分工及数据流：不适用：数据保持本地。",
-            "- API 与 GPU 分工及数据流：将公开合成摘要发送到外部 API 并接收分类结果。",
-        ).replace(
-            "- 外部 API 传输：不允许：合成演练保持本地。",
-            "- 外部 API 传输：允许发送公开合成摘要。",
+            "- 计算与外部服务：TODO（只登记实际计划使用的 GPU、API、模型和数据流）。",
+            "- 计算与外部服务：使用外部 API 分析公开合成摘要。",
         )
         validator = WorkspaceValidator(self.root)
 
@@ -679,7 +625,7 @@ snapshots:
 
         authorized_text = text + """
 
-## 授权记录
+## 补充授权记录
 
 | 授权 ID | 授权事项 | 范围 | 用户确认日期或轮次 | 状态 | 关联决策 ID |
 | --- | --- | --- | --- | --- | --- |
@@ -718,29 +664,19 @@ snapshots:
         self.assertNotIn(env_path, read_paths)
         self.assertIn("SECRET_FILE_VISIBLE", self.codes(validator))
 
-    def test_synthetic_phase_one_end_to_end_passes_without_registries(self) -> None:
+    def test_repository_template_end_to_end_passes_without_registries(self) -> None:
         project_root = self.root / "synthetic-project"
         shutil.copytree(
             REPOSITORY_ROOT,
             project_root,
             ignore=shutil.ignore_patterns(".git", ".venv", "__pycache__"),
         )
-        (project_root / "RESEARCH.md").write_text(
-            self.synthetic_completed_research(), encoding="utf-8"
-        )
-        (project_root / "experiments/TODO.md").write_text(
-            self.synthetic_experiment_todo(), encoding="utf-8"
-        )
-        self.write_synthetic_workflow_state(project_root)
-        self.write_synthetic_evidence(project_root)
         self.initialize_git_repository(project_root)
 
         validator = WorkspaceValidator(project_root)
         findings = validator.validate()
 
-        blocking = [
-            item for item in findings if item.severity in {"ERROR", "WARN"}
-        ]
+        blocking = [item for item in findings if item.severity in {"ERROR", "WARN"}]
         self.assertEqual([], blocking)
         self.assertFalse(any(project_root.glob("*/registry.yaml")))
         self.assertFalse(
@@ -788,63 +724,6 @@ snapshots:
         self.assertEqual(3, len((task_dir / "events.jsonl").read_text().splitlines()))
         self.assertEqual("experiment sentinel\n", experiment_todo.read_text(encoding="utf-8"))
         self.assertEqual("paper sentinel\n", paper_todo.read_text(encoding="utf-8"))
-
-    def test_stage_two_and_three_token_accounts_are_separate(self) -> None:
-        stage_two_dir = self.root / "workflow/tasks/api-task-001"
-        stage_two = TaskProgress(stage_two_dir)
-        stage_two.start(
-            task_run_id="api-task-001",
-            stage="stage_two",
-            task_kind="api_generation",
-            label="synthetic API task",
-            step="generate",
-            total=1,
-            unit="batch",
-        )
-        stage_two_status = stage_two.update(
-            status_name="success",
-            completed=1,
-            resource_updates={
-                "input_tokens": 10,
-                "output_tokens": 5,
-                "api_calls": 1,
-                "api_input_tokens": 100,
-                "api_output_tokens": 40,
-            },
-        )
-        stage_three_dir = self.root / "paper/sessions/write-token-001"
-        stage_three = TaskProgress(stage_three_dir)
-        stage_three.start(
-            task_run_id="write-token-001",
-            stage="stage_three",
-            task_kind="drafting",
-            label="synthetic writing",
-            step="draft",
-            total=1,
-            unit="section",
-        )
-        stage_three_status = stage_three.update(
-            status_name="success",
-            completed=1,
-            resource_updates={"input_tokens": 70, "output_tokens": 30},
-        )
-        validator = WorkspaceValidator(self.root)
-
-        validator.check_task_progress()
-
-        self.assertEqual(15, stage_two_status["resources"]["total_tokens"])
-        self.assertEqual(140, stage_two_status["resources"]["api_total_tokens"])
-        self.assertEqual(100, stage_three_status["resources"]["total_tokens"])
-        self.assertIsNone(stage_three_status["resources"]["api_total_tokens"])
-        self.assertEqual([], validator.findings)
-        self.assertEqual(
-            140,
-            task_token_summary(self.root, "stage_two")["api_total_tokens"],
-        )
-        self.assertEqual(
-            100,
-            task_token_summary(self.root, "stage_three")["total_tokens"],
-        )
 
     def test_stale_running_task_heartbeat_is_reported(self) -> None:
         task_dir = self.root / "paper/sessions/write-001"
@@ -1004,45 +883,6 @@ experiments:
 
         self.assertIn("EXPERIMENT_RUN_UNREGISTERED", self.codes(validator))
 
-    @staticmethod
-    def write_synthetic_workflow_state(project_root: Path) -> None:
-        """Synchronize machine state with the completed synthetic contract."""
-
-        nodes = ("INTAKE", "DIVERGE", "SEARCH", "COMPARE", "DRAFT", "CONFIRM", "GATE_CHECK")
-        events = []
-        for revision, (source, target) in enumerate(zip(nodes, nodes[1:]), start=1):
-            events.append(
-                {
-                    "schema_version": 1,
-                    "transition_id": f"TRANS-{revision:03d}",
-                    "revision": revision,
-                    "from_node": source,
-                    "to_node": target,
-                }
-            )
-        workflow = project_root / "workflow"
-        (workflow / "state.json").write_text(
-            json.dumps(
-                {
-                    "schema_version": 1,
-                    "revision": 6,
-                    "current_phase": "阶段一：调研与设计",
-                    "phase_one_substate": "GATE_CHECK",
-                    "phase_status": "已完成",
-                    "gate_result": "已通过",
-                    "last_transition_id": "TRANS-006",
-                    "updated_at": "2026-07-21T00:00:00+00:00",
-                },
-                ensure_ascii=False,
-            )
-            + "\n",
-            encoding="utf-8",
-        )
-        (workflow / "transitions.jsonl").write_text(
-            "".join(json.dumps(event) + "\n" for event in events),
-            encoding="utf-8",
-        )
-
     def copy_empty_research_evidence(self) -> None:
         """Copy only the committed empty evidence schema into the test workspace."""
 
@@ -1054,494 +894,8 @@ experiments:
             "sources.yaml",
             "claims.yaml",
             "decisions.yaml",
-            "resources.yaml",
         ):
             shutil.copyfile(REPOSITORY_ROOT / "research" / name, target / name)
-
-    @staticmethod
-    def synthetic_completed_research() -> str:
-        """Return a compact, fictional, non-sensitive completed phase-one contract."""
-
-        contract_fields = (
-            ("研究目标", "研究公开合成短文本的规则分类稳定性"),
-            ("研究问题", "RQ-001"),
-            ("成功标准", "SC-001"),
-            ("数据、baseline 与评测", "DATA-001 / BASE-001 / METRIC-001"),
-            ("数据与隐私边界", "仅使用公开合成文本，不含个人信息且禁止外发"),
-            ("计算与外部服务", "仅使用本地 CPU"),
-            ("阶段二执行约束与资源方案", "记录实际用量，无固定总量上限"),
-            ("Skills、依赖与授权", "不适用：使用 Python 标准库且无外部服务"),
-            ("范围外事项", "不训练模型、不处理真实用户数据、不撰写论文"),
-        )
-        contract_rows = "\n".join(
-            f"| {field} | {value} | 用户确认与 CLM-001 | 已确认 | 2026-07-21 / 演练轮次 6 | DEC-001 | CLM-001 |"
-            for field, value in contract_fields
-        )
-        return f"""# 合成阶段一研究合同
-
-本文件仅用于运行时端到端测试，内容均为虚构、公开且非敏感的合成研究方向。
-
-## 当前工作流状态
-
-- 当前阶段：阶段一：调研与设计。
-- 阶段一子状态：GATE_CHECK。
-- 阶段状态：已完成。
-- 阶段门禁：已通过。
-- 停止原因：不适用。
-- 恢复条件：不适用。
-- 最近确认日期：2026-07-21。
-
-## 会话恢复摘要
-
-- 最近交接日期或轮次：2026-07-21 / 演练轮次 7。
-- 当前全局阶段：阶段一：调研与设计。
-- 当前阶段一子状态：GATE_CHECK。
-- 当前候选方向：DIR-001、DIR-002。
-- 当前唯一选定方向：DIR-001。
-- 头脑风暴状态：已结束。
-- 最新趋同判断：趋同；新回答未形成新的实质方向。
-- 用户是否还有更多想法：暂无；进入搜索。
-- 本轮已确认事项：DEC-001，确认 RQ-001、DATA-001、BASE-001、METRIC-001 与 SC-001。
-- 本轮否决方案：拒绝使用真实个人数据和外部模型 API。
-- 当前暂定假设：无；合同字段均已明确确认。
-- 新增证据：SRC-001、CLM-001、DEC-001。
-- 未解决问题：无；本轮未保留开放问题。
-- 下一轮首要任务：执行 experiments/TODO.md 中的 exp-001，但本演练不实际运行实验。
-- 不应重新采用的旧方案：真实用户数据、外部 API 和模型训练。
-
-## 阶段一：调研与设计进度
-
-### 需求获取清单
-
-| 顺序 | 需求字段 | 当前摘要或引用 | 信息来源 | 获取状态 | 最近澄清日期或轮次 | 未决问题 ID |
-| --- | --- | --- | --- | --- | --- | --- |
-| 1 | 用户研究意图 | 演练自动化分阶段科研工作流 | 用户 | 已澄清 | 2026-07-21 / 轮次 1 | 不适用 |
-| 2 | 研究对象 | 公开合成短文本规则分类器 | 用户 | 已澄清 | 2026-07-21 / 轮次 1 | 不适用 |
-| 3 | 核心问题 | 规则对文本扰动的分类稳定性 | 用户与 Codex | 已澄清 | 2026-07-21 / 轮次 2 | 不适用 |
-| 4 | 预期贡献 | 可复现的稳定性测量流程 | 用户 | 已澄清 | 2026-07-21 / 轮次 2 | 不适用 |
-| 5 | 成功标准 | SC-001 | 用户 | 已澄清 | 2026-07-21 / 轮次 3 | 不适用 |
-| 6 | 数据条件 | DATA-001，仅使用运行时合成文本 | 用户 | 已澄清 | 2026-07-21 / 轮次 3 | 不适用 |
-| 7 | baseline | BASE-001，固定关键词精确匹配 | 用户与 Codex | 已澄清 | 2026-07-21 / 轮次 4 | 不适用 |
-| 8 | 指标 | METRIC-001，一致率及 bootstrap 区间 | 用户 | 已澄清 | 2026-07-21 / 轮次 4 | 不适用 |
-| 9 | API/GPU | 不使用 API 或 GPU | 用户 | 已澄清 | 2026-07-21 / 轮次 5 | 不适用 |
-| 10 | 数据许可和隐私 | CC0 合成夹具，不含个人信息且不外发 | 用户 | 已澄清 | 2026-07-21 / 轮次 5 | 不适用 |
-| 11 | 范围外事项 | 真实数据、训练、论文与专利 | 用户 | 已澄清 | 2026-07-21 / 轮次 5 | 不适用 |
-
-### 头脑风暴记录
-
-| 轮次 | Codex 主动问题焦点 | 用户回答摘要 | 新增差异维度 | 关联候选方向 | 趋同判断 |
-| --- | --- | --- | --- | --- | --- |
-| 1 | 更重视透明规则还是外部模型能力 | 用户优先透明且本地的规则评测 | 方法机制、验证方式 | DIR-001、DIR-002 | 有新差异 |
-| 2 | 是否还有不同的研究对象或贡献形式 | 暂时没有，已有方向足够比较 | 无 | DIR-001、DIR-002 | 趋同 |
-
-- 发散结论：用户表示暂时没有更多想法，进入 SEARCH。
-
-### 候选方向比较
-
-| 候选方向 ID | 核心问题 | 研究价值 | 创新性风险 | 数据需求 | 计算成本 | 验证难度 | 预计交付物 | 关联研究问题 ID | 状态 | 选择或否决理由 | 决策 ID |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| DIR-001 | 固定规则对合成文本扰动是否稳定 | 提供透明且可复现的工作流演练 | 创新性有限但适合验证模板 | 100 条运行时合成文本 | 本地 CPU，成本低 | 可用确定性脚本直接验证 | 脚本计划、指标和运行记录 | RQ-001 | 已选定 | 无外发和隐私风险，能够完整验证证据链 | DEC-001 |
-| DIR-002 | 外部模型对合成文本扰动是否稳定 | 可比较模型语义鲁棒性 | 容易与既有模型评测重复 | 合成文本及外部模型响应 | 产生 API 调用费用 | 受模型版本和服务波动影响 | API 评测报告 | 不适用 | 已否决 | 引入不必要的外发、费用和不可控版本风险 | DEC-001 |
-
-## 研究合同字段状态
-
-| 合同字段 | 当前值或引用 | 信息来源 | 确认状态 | 最近确认日期或轮次 | 决策 ID | 证据 ID |
-| --- | --- | --- | --- | --- | --- | --- |
-{contract_rows}
-
-## 研究目标
-
-| 当前值 | 信息来源 | 确认状态 | 最近确认日期或轮次 | 决策 ID | 证据 ID |
-| --- | --- | --- | --- | --- | --- |
-| 研究公开合成短文本的规则分类稳定性 | 用户确认与 CLM-001 | 已确认 | 2026-07-21 | DEC-001 | CLM-001 |
-
-## 研究问题
-
-| 研究问题 ID | 当前值 | 信息来源 | 确认状态 | 最近确认日期或轮次 | 决策 ID | 证据 ID |
-| --- | --- | --- | --- | --- | --- | --- |
-| RQ-001 | 固定关键词规则在公开合成扰动文本上的分类一致率是多少 | 用户确认 | 已确认 | 2026-07-21 | DEC-001 | CLM-001 |
-
-## 预期贡献
-
-| 贡献 ID | 当前值 | 比较 baseline ID | 信息来源 | 确认状态 | 最近确认日期或轮次 | 决策 ID | 证据 ID |
-| --- | --- | --- | --- | --- | --- | --- | --- |
-| CONTRIB-001 | 提供可复现的合成文本稳定性测量 | BASE-001 | 用户确认 | 已确认 | 2026-07-21 | DEC-001 | CLM-001 |
-
-## 成功标准
-
-| 成功标准 ID | 当前值 | 关联研究问题 ID | 信息来源 | 确认状态 | 最近确认日期或轮次 | 决策 ID | 证据 ID |
-| --- | --- | --- | --- | --- | --- | --- | --- |
-| SC-001 | 在固定的 100 条合成样本上报告一致率、95% bootstrap 区间及全部失败样本数量 | RQ-001 | 用户确认 | 已确认 | 2026-07-21 | DEC-001 | CLM-001 |
-
-- 必须完成的消融：比较区分大小写与不区分大小写两种规则。
-- 必须完成的稳健性验证：对空格和标点扰动分别报告一致率。
-- 负面结果的有效完成条件：按预定口径完成评测并保留失败样本的脱敏编号。
-
-## 数据集、baseline 与评测
-
-### 数据集
-
-| 数据 ID | 当前值 | 来源、版本与许可证 | 信息来源 | 确认状态 | 最近确认日期或轮次 | 决策 ID | 证据 ID |
-| --- | --- | --- | --- | --- | --- | --- | --- |
-| DATA-001 | 运行时生成的 100 条虚构短文本 | SRC-001；版本 1；CC0 合成夹具 | 用户确认 | 已确认 | 2026-07-21 | DEC-001 | CLM-001 |
-
-### Baseline
-
-| baseline ID | 当前值 | 上游版本或 revision | 信息来源 | 确认状态 | 最近确认日期或轮次 | 决策 ID | 证据 ID |
-| --- | --- | --- | --- | --- | --- | --- | --- |
-| BASE-001 | 固定关键词精确匹配规则 | 本地规范版本 1 | 用户确认 | 已确认 | 2026-07-21 | DEC-001 | CLM-001 |
-
-### 评测指标
-
-| 指标 ID | 当前值与统计口径 | 所需数据 ID | 信息来源 | 确认状态 | 最近确认日期或轮次 | 决策 ID | 证据 ID |
-| --- | --- | --- | --- | --- | --- | --- | --- |
-| METRIC-001 | 分类一致率和 95% bootstrap 区间，固定种子 1337 | DATA-001 | 用户确认 | 已确认 | 2026-07-21 | DEC-001 | CLM-001 |
-
-## 研究合同一致性关系
-
-| 研究问题 ID | 数据 ID | baseline ID | 指标 ID | 成功标准 ID | 阶段二实验 ID | 关系状态 |
-| --- | --- | --- | --- | --- | --- | --- |
-| RQ-001 | DATA-001 | BASE-001 | METRIC-001 | SC-001 | exp-001 | 已确认 |
-
-## 数据与隐私边界
-
-- 数据分类：公开合成数据。
-- 个人信息：不包含；生成规则禁止姓名、联系方式和真实标识。
-- 内部或受限数据：不使用。
-- 外部 API 传输：不允许：合成演练保持本地。
-- 允许外发范围：不适用：没有外部服务调用。
-- 日志与产物脱敏：只记录合成样本编号，不记录完整失败文本。
-- 数据保留与删除：测试临时目录在测试结束后删除。
-- 论文、图表与公开限制：不适用：本演练不生成论文或对外产物。
-
-## 计算与外部服务
-
-- 本地计算资源：普通 CPU 与 Python 标准库。
-- GPU 用途：不适用：规则分类不需要 GPU。
-- 外部模型 API：不适用：合成演练只使用本地 CPU。
-- API 用途：不适用：不调用外部服务。
-- API 模型：不适用：不调用外部服务。
-- API 与 GPU 分工及数据流：不适用：数据保持本地。
-
-## 阶段二执行约束与资源方案
-
-- 阶段二失败停止规则：任何预检失败均停止，不生成运行证据。
-- 阶段二资源计量：记录实际 CPU 使用；不设置固定 GPU 时间、API 调用或 API 费用上限。
-
-### 阶段一资源记录说明
-
-阶段一只记录实际用量，不设置查询、页面、调用、费用、时间或存储上限。
-
-## Skills 与辅助工具
-
-- 计划使用的 Skills：不适用：合成演练使用标准库。
-- Skill 用途与阶段：不适用：不调用 Skill。
-- 外部传输、依赖、费用与内容保存授权：不适用：无外发、依赖或费用。
-- Skill 产生内容的核验与归档位置：不适用：无 Skill 产物。
-
-## 范围外事项
-
-- 模型训练、真实个人数据、外部服务调用、论文与专利均不在范围内。
-
-## 调研证据摘要
-
-| 主张 ID | 摘要 | 来源 ID | 支持的合同字段或研究问题 ID | 核验状态 |
-| --- | --- | --- | --- | --- |
-| CLM-001 | 合成夹具规范定义了固定数据生成和评测边界 | SRC-001 | RQ-001、DATA-001、SC-001 | 已核验 |
-
-| 来源 ID | 最小引用信息或 URL | 核验日期 | 状态 |
-| --- | --- | --- | --- |
-| SRC-001 | 合成测试夹具规范，https://example.invalid/synthetic-fixture-v1 | 2026-07-21 | 已核验 |
-
-## 当前决策
-
-| 决策 ID | 日期 | 决策 | 理由摘要 | 影响字段 | 用户确认状态 | 证据 ID |
-| --- | --- | --- | --- | --- | --- | --- |
-| DEC-001 | 2026-07-21 | 采用本地、公开、合成的规则分类稳定性方向 | 可完整演练证据链且无隐私、费用和外发风险 | 研究合同全部字段 | 已确认 | CLM-001 |
-
-## 阶段切换记录
-
-| 切换 ID | 日期 | 原阶段 | 新阶段 | 门禁结果 | 原因或授权 | 决策 ID |
-| --- | --- | --- | --- | --- | --- | --- |
-| TRANS-001 | 2026-07-21 | INTAKE | DIVERGE | 已通过 | 用户提供研究种子 | DEC-001 |
-| TRANS-002 | 2026-07-21 | DIVERGE | SEARCH | 已通过 | 用户结束发散并保留两个候选 | DEC-001 |
-| TRANS-003 | 2026-07-21 | SEARCH | COMPARE | 已通过 | 八类覆盖与停止代理满足 | DEC-001 |
-| TRANS-004 | 2026-07-21 | COMPARE | DRAFT | 已通过 | 用户选择唯一方向 | DEC-001 |
-| TRANS-005 | 2026-07-21 | DRAFT | CONFIRM | 已通过 | 合同草案完整 | DEC-001 |
-| TRANS-006 | 2026-07-21 | CONFIRM | GATE_CHECK | 已通过 | 字段逐项确认完成 | DEC-001 |
-"""
-
-    @staticmethod
-    def synthetic_experiment_todo() -> str:
-        """Return an executable-looking plan without creating or running an experiment."""
-
-        return """# 合成实验任务
-
-本文件仅用于端到端门禁测试，不表示已经执行实验。
-
-## 当前目标
-
-- 目标：实现并运行固定关键词分类稳定性评测。
-- 验证标准：满足 SC-001 的预定报告口径。
-
-## 进行中
-
-| 任务 ID | 实验 ID | 研究问题 ID | 成功标准 ID | 任务 | 状态 | 完成条件 | 证据位置 |
-| --- | --- | --- | --- | --- | --- | --- | --- |
-| EXP-TASK-001 | exp-001 | RQ-001 | SC-001 | 编写独立脚本并运行合成稳定性评测 | 未开始 | 输出一致率、区间、消融和稳健性结果 | 尚未产生运行证据 |
-
-## 下一步
-
-| 优先级 | 实验 ID | 研究问题 ID | 成功标准 ID | 任务 | 前置条件 | 完成条件 |
-| --- | --- | --- | --- | --- | --- | --- |
-| P0 | exp-001 | RQ-001 | SC-001 | 创建脚本和新的运行目录 | 阶段二进入门禁通过 | 生成不可变运行记录 |
-
-## 阻塞项
-
-| 实验 ID | 原因 | 所需处理 | 恢复条件 |
-| --- | --- | --- | --- |
-| 不适用 | 无 | 无 | 无 |
-
-## 已完成摘要
-
-尚无已执行实验或结果。
-"""
-
-    @staticmethod
-    def write_synthetic_evidence(project_root: Path) -> None:
-        """Write runtime-only fictional query, source, claim, and decision evidence."""
-
-        search_entries = [
-            {
-                "query_id": "QRY-001",
-                "direction_ids": ["DIR-001"],
-                "research_question_ids": ["RQ-001"],
-                "search_categories": sorted(REQUIRED_SEARCH_CATEGORIES),
-                "query": "合成关键词分类器 稳定性 baseline 失败 数据 指标 许可 相似工作",
-                "language": "zh",
-                "keyword_variants": ["规则分类", "扰动稳定性", "负面结果"],
-                "platform": "local synthetic fixture catalog",
-                "searched_at": "2026-07-22T10:00:00+08:00",
-                "filters": {"date": "2026-07-22"},
-                "result_count": 1,
-                "included_source_ids": ["SRC-001"],
-                "exclusions": [],
-                "counterevidence_search": True,
-                "citation_tracking": True,
-                "returned_content_size": 180,
-                "returned_content_unit": "characters",
-                "page_count": 1,
-                "external_tool_calls": 0,
-            },
-            {
-                "query_id": "QRY-002",
-                "direction_ids": ["DIR-002"],
-                "research_question_ids": [],
-                "search_categories": sorted(REQUIRED_SEARCH_CATEGORIES),
-                "query": "synthetic external model robustness baseline failures datasets metrics licensing related work",
-                "language": "en",
-                "keyword_variants": ["model robustness", "negative results", "related work"],
-                "platform": "local synthetic fixture catalog",
-                "searched_at": "2026-07-22T10:05:00+08:00",
-                "filters": {"date": "2026-07-22"},
-                "result_count": 1,
-                "included_source_ids": ["SRC-001"],
-                "exclusions": [],
-                "counterevidence_search": True,
-                "citation_tracking": True,
-                "returned_content_size": 220,
-                "returned_content_unit": "characters",
-                "page_count": 1,
-                "external_tool_calls": 0,
-            },
-        ]
-        (project_root / "research/search_log.jsonl").write_text(
-            "".join(
-                json.dumps(entry, ensure_ascii=False) + "\n"
-                for entry in search_entries
-            ),
-            encoding="utf-8",
-        )
-        coverage = {
-            category: "已覆盖" for category in REQUIRED_SEARCH_CATEGORIES
-        }
-        coverage_entries = [
-            {
-                "direction_id": "DIR-001",
-                "research_question_ids": ["RQ-001"],
-                "query_ids": ["QRY-001"],
-            },
-            {
-                "direction_id": "DIR-002",
-                "research_question_ids": [],
-                "query_ids": ["QRY-002"],
-            },
-        ]
-        coverage_lines = ["schema_version: 1", "direction_coverage:"]
-        for entry in coverage_entries:
-            coverage_lines.extend(
-                [
-                    f'  - direction_id: "{entry["direction_id"]}"',
-                    "    research_question_ids: "
-                    + json.dumps(entry["research_question_ids"], ensure_ascii=False),
-                    "    query_ids: "
-                    + json.dumps(entry["query_ids"], ensure_ascii=False),
-                    "    coverage: " + json.dumps(coverage, ensure_ascii=False),
-                    "    coverage_notes: {}",
-                    '    chinese_keywords: ["规则分类", "稳定性", "失败结果"]',
-                    '    english_keywords: ["rule classification", "robustness", "negative results"]',
-                    '    citation_tracking_source_ids: ["SRC-001"]',
-                    '    planned_languages: ["zh", "en"]',
-                    '    covered_languages: ["zh", "en"]',
-                    '    planned_platforms: ["local synthetic fixture catalog"]',
-                    '    covered_platforms: ["local synthetic fixture catalog"]',
-                    '    planned_date_range: "2026-07-22 synthetic range"',
-                    '    covered_date_range: "2026-07-22 synthetic range"',
-                    "    independent_source_yield_history: [1.0, 0.0]",
-                    "    new_method_categories_history: [1, 0]",
-                    "    key_questions_covered: true",
-                    "    counterevidence_completed: true",
-                    "    citation_tracking_completed: true",
-                    "    uncovered_scope: []",
-                    '    stop_reason: "observable yield declined and the latest batch added no method category"',
-                    '    stop_status: "已停止"',
-                    '    last_updated_at: "2026-07-22T10:10:00+08:00"',
-                ]
-            )
-        (project_root / "research/search_coverage.yaml").write_text(
-            "\n".join(coverage_lines) + "\n", encoding="utf-8"
-        )
-        (project_root / "research/sources.yaml").write_text(
-            """schema_version: 1
-sources:
-  - source_id: "SRC-001"
-    title: "Synthetic fixture specification"
-    creators: ["Local test suite"]
-    url: null
-    doi_or_identifier: "urn:codex-test:synthetic-fixture-v1"
-    published_at: "2026-07-22"
-    accessed_at: "2026-07-22"
-    source_type: "测试规范"
-    quality_level: 1
-    provenance_level: "原始来源"
-    primary_source_id: null
-    independence_group: "synthetic-fixture-v1"
-    usage_role: "关键证据"
-    data_classification: "公开"
-    version: "1"
-    license: "CC0-1.0"
-    contains_restricted_content: false
-    external_transfer_allowed: false
-    accessibility_status: "可访问"
-    locator_exists: true
-    locator_verified_at: "2026-07-22"
-    locator_verification_method: "官方登记"
-    update_retraction_conflict_status: "无已知问题"
-    notes: "Runtime-only fictional fixture metadata."
-""",
-            encoding="utf-8",
-        )
-        (project_root / "research/claims.yaml").write_text(
-            """schema_version: 1
-claims:
-  - claim_id: "CLM-001"
-    claim: "The synthetic fixture specification defines fixed generation and evaluation boundaries."
-    research_question_ids: ["RQ-001"]
-    source_ids: ["SRC-001"]
-    evidence_locations: ["fixture specification section 1"]
-    support_level: "直接支持"
-    source_independence: "独立"
-    temporal_status: "当前有效"
-    conflict_status: "无已知冲突"
-    verification_status: "已核验"
-    citation_support_verified: true
-    numeric_details_verified: true
-    scope_match_verified: true
-    causality_checked: true
-    model_inference_status: "非模型推论"
-    conflict_type: "无"
-    conflict_reason: null
-    uncertainty_notes: null
-    adverse_evidence_retained: true
-    verification_notes: "Checked the synthetic locator, scope, version, and evidence location."
-    eligible_for_research_contract: true
-""",
-            encoding="utf-8",
-        )
-        resources_path = project_root / "research/resources.yaml"
-        resources_template = """schema_version: 1
-snapshots:
-  - resource_id: "RES-001"
-    recorded_at: "2026-07-22T10:15:00+08:00"
-    status: "当前"
-    brainstorm_input_tokens: null
-    brainstorm_output_tokens: null
-    brainstorm_total_tokens: null
-    input_tokens: null
-    output_tokens: null
-    total_tokens: null
-    search_return_size: 400
-    search_return_unit: "characters"
-    search_queries: 2
-    search_pages: 2
-    external_tool_calls: 0
-    api_calls: 0
-    elapsed_seconds: 900
-    estimated_cost: 0
-    cost_currency: "CNY"
-    evidence_file_bytes: {evidence_bytes}
-    claim_count: 1
-    context_compactions: 0
-    unavailable_metrics: ["brainstorm_input_tokens: local fixture does not report tokens", "brainstorm_output_tokens: local fixture does not report tokens", "brainstorm_total_tokens: local fixture does not report tokens", "input_tokens: local fixture does not report tokens", "output_tokens: local fixture does not report tokens", "total_tokens: local fixture does not report tokens"]
-"""
-        evidence_bytes = 0
-        for _ in range(4):
-            resources_path.write_text(
-                resources_template.format(evidence_bytes=evidence_bytes),
-                encoding="utf-8",
-            )
-            measured = WorkspaceValidator(project_root).phase_one_evidence_bytes()
-            if measured == evidence_bytes:
-                break
-            evidence_bytes = measured
-        affected_fields = [
-            "研究目标",
-            "研究问题",
-            "成功标准",
-            "数据、baseline 与评测",
-            "数据与隐私边界",
-            "计算与外部服务",
-            "阶段二执行约束与资源方案",
-            "Skills、依赖与授权",
-            "范围外事项",
-        ]
-        (project_root / "research/decisions.yaml").write_text(
-            """schema_version: 1
-decisions:
-  - decision_id: "DEC-001"
-    decision: "Use the local public synthetic rule-classification direction."
-    user_input_source: "2026-07-21 synthetic exercise turn 6"
-    supporting_claim_ids: ["CLM-001"]
-    alternatives: ["Use real user text", "Call an external model API"]
-    rejection_reasons: ["Unnecessary privacy risk", "Unnecessary transfer and cost"]
-    user_confirmation_status: "已确认"
-    affected_contract_fields: """
-            + json.dumps(affected_fields, ensure_ascii=False)
-            + """
-    triggers_phase_rollback: false
-    decided_at: "2026-07-21"
-""",
-            encoding="utf-8",
-        )
-        for _ in range(4):
-            resources_path.write_text(
-                resources_template.format(evidence_bytes=evidence_bytes),
-                encoding="utf-8",
-            )
-            measured = WorkspaceValidator(project_root).phase_one_evidence_bytes()
-            if measured == evidence_bytes:
-                break
-            evidence_bytes = measured
 
     @staticmethod
     def initialize_git_repository(project_root: Path) -> None:
@@ -1585,10 +939,6 @@ decisions:
             "exclusions": [],
             "counterevidence_search": False,
             "citation_tracking": False,
-            "returned_content_size": 10,
-            "returned_content_unit": "characters",
-            "page_count": 1,
-            "external_tool_calls": 0,
         }
         entry.update(overrides)
         return entry
@@ -1620,6 +970,9 @@ decisions:
             "counterevidence_completed": True,
             "citation_tracking_completed": True,
             "uncovered_scope": [],
+            "stop_type": "证据饱和",
+            "blocking_issue": None,
+            "blocking_source_ids": [],
             "stop_reason": "independent-source yield declined and no new method category appeared",
             "stop_status": "已停止",
             "last_updated_at": "2026-07-22T10:10:00+08:00",
@@ -1661,44 +1014,6 @@ decisions:
         if "source_id" in overrides and "doi_or_identifier" not in overrides:
             source["doi_or_identifier"] = f"urn:test:{source['source_id']}"
         return source
-
-    @staticmethod
-    def valid_resource(**overrides: object) -> dict[str, object]:
-        """Create one schema-valid phase-one resource snapshot."""
-
-        resource: dict[str, object] = {
-            "resource_id": "RES-001",
-            "recorded_at": "2026-07-22T10:15:00+08:00",
-            "status": "当前",
-            "brainstorm_input_tokens": None,
-            "brainstorm_output_tokens": None,
-            "brainstorm_total_tokens": None,
-            "input_tokens": None,
-            "output_tokens": None,
-            "total_tokens": None,
-            "search_return_size": 0,
-            "search_return_unit": "characters",
-            "search_queries": 0,
-            "search_pages": 0,
-            "external_tool_calls": 0,
-            "api_calls": 0,
-            "elapsed_seconds": 0,
-            "estimated_cost": 0,
-            "cost_currency": "CNY",
-            "evidence_file_bytes": 0,
-            "claim_count": 0,
-            "context_compactions": 0,
-            "unavailable_metrics": [
-                "brainstorm_input_tokens: unavailable in local fixture",
-                "brainstorm_output_tokens: unavailable in local fixture",
-                "brainstorm_total_tokens: unavailable in local fixture",
-                "input_tokens: unavailable in local fixture",
-                "output_tokens: unavailable in local fixture",
-                "total_tokens: unavailable in local fixture",
-            ],
-        }
-        resource.update(overrides)
-        return resource
 
     @staticmethod
     def valid_claim(**overrides: object) -> dict[str, object]:

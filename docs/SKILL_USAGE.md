@@ -32,7 +32,7 @@
 - 根据真实输入格式选择读取类 Skill；没有对应文件或任务时不调用。
 - 开始 OCR 或其他外部解析前，在 `RESEARCH.md` 记录数据分类、允许外发范围、付费授权和实际用量计量方式。
 - 只有用户明确希望长期复用某篇论文时，才创建 paper Skill；普通论文阅读不自动产生 `.agents/skills/paper-*`。
-- Skill 参与阶段一调研时，仍须遵循 `docs/SEARCH_PROTOCOL.md`。将实际查询、方向覆盖、正式来源、可核验主张、持久决策和累计资源分别登记到 `research/search_log.jsonl`、`research/search_coverage.yaml`、`research/sources.yaml`、`research/claims.yaml`、`research/decisions.yaml` 与 `research/resources.yaml`；工具调用、返回字符或 token、页面、时间和估算费用只作计量，不构成阶段一固定上限。Skill 结果必须回查原始来源，不能把模型输出或工具置信度当作真实性证明，也不得将 OCR 全文、工具原始响应或受限材料直接放入活动上下文或可提交证据。在 `RESEARCH.md` 只保留稳定 ID 摘要，并把本轮新增 ID 写入会话恢复摘要。
+- Skill 参与正式阶段一调研时，仍须遵循 `docs/SEARCH_PROTOCOL.md`，将正式查询、覆盖、来源、主张和持久决策登记到 `research/`。Skill 结果必须回查原始来源，不得把模型输出、OCR 全文、工具原始响应或受限材料直接放入长期活动上下文。
 - 在阶段一结束前，将阶段二确实需要的 Skill、依赖与授权登记到 `RESEARCH.md` 和 `experiments/TODO.md`；不预生成不适用任务。
 
 ### 阶段二：实验与分析

@@ -151,6 +151,11 @@ def validate_target(
         target_validator.check_phase_one_evidence(
             "阶段一：调研与设计", status, phase_one_state_override=target
         )
+        target_validator.check_unresolved_todos(
+            "阶段一：调研与设计",
+            status,
+            phase_one_state_override=target,
+        )
     else:
         target_validator.check_research_contract(
             target,

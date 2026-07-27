@@ -39,6 +39,4 @@ uv run python scripts/transition_workflow.py --to DIVERGE --reason "用户提供
 
 运行中的脚本至少每 30 秒更新心跳。Codex 应每 30–60 秒轮询并向用户报告实验/章节、seed 或写作步骤、完成量、资源消耗、最近心跳、已保存检查点和阻塞原因。百分比必须来自明确的完成数与总数，不能按生成字数猜测。
 
-`status.json.resources` 将 Codex 任务或写作会话 token 记为 `input_tokens`、`output_tokens`、`total_tokens`，将阶段二实验调用外部模型 API 的 token 单独记为 `api_input_tokens`、`api_output_tokens`、`api_total_tokens`。阶段三以第一组字段作为写作 token；阶段二 API 统计只使用第二组，禁止混计。无法取得时在 `token_unavailable_reasons` 中写 `field: reason`，不得用 0 表示未知。
-
 实时进度系统不得自动改写 `experiments/TODO.md` 或 `paper/TODO.md`。两个 TODO 文件继续按原有方式由 Codex 在任务规划、正式状态变化、阻塞处理和完成交接时维护；每次心跳、step、sample、epoch 或百分比变化只写上述实时状态文件。TODO 与实时状态关注不同层级，不要求逐事件逐字段相同。

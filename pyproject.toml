@@ -11,13 +11,9 @@ dependencies = [
     "pyarrow>=21.0.0",
     "requests>=2.32.0",
     "rustbpe>=0.1.0",
-    "tiktoken>=0.11.0",
     "torch==2.7.1",
     "paddleocr>=3.7.0",
 ]
-
-[project.scripts]
-research = "tools.research_cli.cli:main"
 
 [tool.uv.sources]
 torch = [

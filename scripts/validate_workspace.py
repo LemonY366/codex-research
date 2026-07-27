@@ -32,7 +32,6 @@ REQUIRED_PATHS = (
     "research/sources.yaml",
     "research/claims.yaml",
     "research/decisions.yaml",
-    "research/resources.yaml",
     "research/archive/README.md",
     "research/summaries/README.md",
     "experiments/TODO.md",
@@ -98,17 +97,12 @@ REQUIRED_INTAKE_FIELDS = (
     "用户研究意图",
     "研究对象",
     "核心问题",
-    "预期贡献",
-    "成功标准",
-    "数据条件",
-    "baseline",
-    "指标",
-    "API/GPU",
-    "数据许可和隐私",
-    "范围外事项",
+    "创新性假设",
+    "最小可证伪路径",
+    "范围边界",
 )
-VALID_INTAKE_STATUSES = {"已澄清", "暂定", "待澄清", "明确未知", "不适用"}
-VALID_DIRECTION_STATUSES = {"候选", "已选定", "已否决"}
+VALID_INTAKE_STATUSES = {"已澄清", "暂定", "待澄清", "明确未知"}
+VALID_DIRECTION_STATUSES = {"入围", "已选定", "已否决", "已合并"}
 VALID_CONFIRMATION_STATUSES = {
     "已确认",
     "暂定",
@@ -118,15 +112,11 @@ VALID_CONFIRMATION_STATUSES = {
 }
 BLOCKING_CONFIRMATION_STATUSES = {"暂定", "待确认", "存在冲突"}
 REQUIRED_CONTRACT_FIELDS = {
-    "研究目标",
-    "研究问题",
-    "成功标准",
-    "数据、baseline 与评测",
-    "数据与隐私边界",
-    "计算与外部服务",
-    "阶段二执行约束与资源方案",
-    "Skills、依赖与授权",
-    "范围外事项",
+    "最终研究方向",
+    "数据、baseline、指标与成功标准",
+    "阶段二实验与资源方案",
+    "数据、许可与隐私边界",
+    "范围边界",
 }
 PLACEHOLDER_CELLS = {"", "-", "TODO", "待分配"}
 RESEARCH_ID_DEFINITIONS = (
@@ -223,10 +213,6 @@ SEARCH_LOG_REQUIRED_FIELDS = {
     "exclusions",
     "counterevidence_search",
     "citation_tracking",
-    "returned_content_size",
-    "returned_content_unit",
-    "page_count",
-    "external_tool_calls",
 }
 SEARCH_COVERAGE_REQUIRED_FIELDS = {
     "direction_id",
@@ -249,33 +235,12 @@ SEARCH_COVERAGE_REQUIRED_FIELDS = {
     "counterevidence_completed",
     "citation_tracking_completed",
     "uncovered_scope",
+    "stop_type",
+    "blocking_issue",
+    "blocking_source_ids",
     "stop_reason",
     "stop_status",
     "last_updated_at",
-}
-RESOURCE_REQUIRED_FIELDS = {
-    "resource_id",
-    "recorded_at",
-    "status",
-    "brainstorm_input_tokens",
-    "brainstorm_output_tokens",
-    "brainstorm_total_tokens",
-    "input_tokens",
-    "output_tokens",
-    "total_tokens",
-    "search_return_size",
-    "search_return_unit",
-    "search_queries",
-    "search_pages",
-    "external_tool_calls",
-    "api_calls",
-    "elapsed_seconds",
-    "estimated_cost",
-    "cost_currency",
-    "evidence_file_bytes",
-    "claim_count",
-    "context_compactions",
-    "unavailable_metrics",
 }
 REQUIRED_SEARCH_CATEGORIES = {
     "背景",
@@ -289,8 +254,7 @@ REQUIRED_SEARCH_CATEGORIES = {
 }
 VALID_COVERAGE_STATUSES = {"已覆盖", "部分覆盖", "未覆盖", "不适用"}
 VALID_SEARCH_STOP_STATUSES = {"未开始", "进行中", "可停止", "已停止"}
-VALID_RETURN_SIZE_UNITS = {"tokens", "characters", "unavailable"}
-VALID_RESOURCE_STATUSES = {"当前", "已归档"}
+VALID_SEARCH_STOP_TYPES = {"证据饱和", "可行性阻断"}
 VALID_SOURCE_USAGE_ROLES = {"关键证据", "补充证据", "检索线索"}
 VALID_LOCATOR_METHODS = {"人工打开", "DOI解析", "官方登记", "工具检查", "未核验"}
 VALID_MODEL_INFERENCE_STATUSES = {"非模型推论", "已明确标注", "未明确标注"}
@@ -852,17 +816,25 @@ class WorkspaceValidator:
         return match.group(1).strip() if match else None
 
     def check_unresolved_todos(
-        self, phase: str | None, status: str | None
+        self,
+        phase: str | None,
+        status: str | None,
+        phase_one_state_override: str | None = None,
     ) -> None:
         """Report unresolved placeholders when workflow progress makes them critical."""
 
         research_path = self.root / "RESEARCH.md"
         if not research_path.is_file():
             return
-        research_count = self.count_todo_markers(research_path.read_text("utf-8"))
+        research_text = research_path.read_text("utf-8")
+        research_count = self.count_todo_markers(research_text)
+        phase_one_state = phase_one_state_override or self.extract_field(
+            research_text, "阶段一子状态"
+        )
 
         later_phase = phase in {"阶段二：实验与分析", "阶段三：论文写作"}
-        if research_count and (later_phase or status == "已完成"):
+        gate_check = phase_one_state == "GATE_CHECK"
+        if research_count and (later_phase or gate_check or status == "已完成"):
             self.add(
                 "ERROR",
                 "CRITICAL_RESEARCH_TODO",
@@ -928,7 +900,7 @@ class WorkspaceValidator:
         phase_one_state = phase_one_state_override or self.extract_field(
             text, "阶段一子状态"
         )
-        transition_ready = phase in {
+        transition_ready = phase_one_state == "GATE_CHECK" or phase in {
             "阶段二：实验与分析",
             "阶段三：论文写作",
         } or status == "已完成"
@@ -1142,8 +1114,7 @@ class WorkspaceValidator:
                                 f"{auth_id} is confirmed without an associated decision",
                             )
 
-        if not preflight_transition:
-            self.check_research_recovery(text, phase, status, transition_ready)
+        self.check_research_recovery(text, phase, status, transition_ready)
         self.check_research_contract_quality(text, tables, transition_ready)
         self.check_requirement_intake(tables, phase_one_state, transition_ready)
         self.check_brainstorm(tables, text, phase_one_state, transition_ready)
@@ -1203,7 +1174,7 @@ class WorkspaceValidator:
             (
                 table_rows
                 for headers, table_rows in tables
-                if {"顺序", "需求字段", "获取状态"}.issubset(headers)
+                if {"方向字段", "当前摘要", "状态"}.issubset(headers)
             ),
             None,
         )
@@ -1212,30 +1183,22 @@ class WorkspaceValidator:
                 "ERROR",
                 "RESEARCH_INTAKE_TABLE_MISSING",
                 "RESEARCH.md",
-                "research contract must add the progressive eleven-field intake table",
+                "research contract must contain the compact direction-formation table",
             )
             return
 
-        actual_fields = tuple(row.get("需求字段", "") for row in rows)
+        actual_fields = tuple(row.get("方向字段", "") for row in rows)
         if actual_fields != REQUIRED_INTAKE_FIELDS:
             self.add(
                 "ERROR",
                 "RESEARCH_INTAKE_ORDER_INVALID",
                 "RESEARCH.md",
-                "requirement-intake rows must contain the eleven required fields in order",
+                "direction-formation rows must contain the six required fields in order",
             )
 
-        for expected_index, row in enumerate(rows, start=1):
-            if row.get("顺序") != str(expected_index):
-                self.add(
-                    "ERROR",
-                    "RESEARCH_INTAKE_SEQUENCE_INVALID",
-                    "RESEARCH.md",
-                    "requirement-intake sequence numbers must be consecutive from 1 to 12",
-                )
-                break
-            field = row.get("需求字段", "requirement")
-            intake_status = row.get("获取状态", "")
+        for row in rows:
+            field = row.get("方向字段", "direction field")
+            intake_status = row.get("状态", "")
             if intake_status not in VALID_INTAKE_STATUSES:
                 self.add(
                     "ERROR",
@@ -1244,7 +1207,7 @@ class WorkspaceValidator:
                     f"{field} has an unsupported intake status",
                 )
                 continue
-            summary = row.get("当前摘要或引用", "")
+            summary = row.get("当前摘要", "")
             if intake_status != "待澄清" and (
                 summary in PLACEHOLDER_CELLS or summary.startswith("TODO")
             ):
@@ -1263,23 +1226,13 @@ class WorkspaceValidator:
                     "RESEARCH.md",
                     f"{field} is explicitly unknown without an OPEN-<nnn>",
                 )
-            if intake_status == "不适用" and not self.has_not_applicable_reason(
-                summary
-            ):
-                self.add(
-                    "ERROR",
-                    "RESEARCH_NOT_APPLICABLE_REASON_MISSING",
-                    "RESEARCH.md",
-                    f"{field} is not applicable but has no explicit reason",
-                )
-
         if phase_one_state not in VALID_PHASE_ONE_STATES:
             return
         state_index = PHASE_ONE_STATE_ORDER.index(phase_one_state)
-        row_by_field = {row.get("需求字段", ""): row for row in rows}
+        row_by_field = {row.get("方向字段", ""): row for row in rows}
         if state_index >= PHASE_ONE_STATE_ORDER.index("DIVERGE"):
             field = REQUIRED_INTAKE_FIELDS[0]
-            if row_by_field.get(field, {}).get("获取状态") == "待澄清":
+            if row_by_field.get(field, {}).get("状态") == "待澄清":
                 self.add(
                     "ERROR",
                     "RESEARCH_INTAKE_SEED_MISSING",
@@ -1289,29 +1242,15 @@ class WorkspaceValidator:
         if state_index >= PHASE_ONE_STATE_ORDER.index("SEARCH"):
             pending = [
                 field
-                for field in REQUIRED_INTAKE_FIELDS[:4]
-                if row_by_field.get(field, {}).get("获取状态") == "待澄清"
+                for field in REQUIRED_INTAKE_FIELDS
+                if row_by_field.get(field, {}).get("状态") == "待澄清"
             ]
             if pending:
                 self.add(
                     "ERROR",
                     "RESEARCH_INTAKE_INCOMPLETE_FOR_SEARCH",
                     "RESEARCH.md",
-                    f"direction-level intake must be addressed before SEARCH: {', '.join(pending)}",
-                )
-        if state_index >= PHASE_ONE_STATE_ORDER.index("DRAFT") or transition_ready:
-            unresolved = [
-                field
-                for field in REQUIRED_INTAKE_FIELDS
-                if row_by_field.get(field, {}).get("获取状态")
-                not in {"已澄清", "不适用"}
-            ]
-            if unresolved:
-                self.add(
-                    "ERROR",
-                    "RESEARCH_INTAKE_INCOMPLETE_FOR_DRAFT",
-                    "RESEARCH.md",
-                    f"final contract cannot be drafted from unresolved intake fields: {', '.join(unresolved)}",
+                    f"direction-forming fields must be addressed before SEARCH: {', '.join(pending)}",
                 )
 
     def check_brainstorm(
@@ -1323,14 +1262,7 @@ class WorkspaceValidator:
     ) -> None:
         """Require a Codex-led divergence record before search begins."""
 
-        required_columns = {
-            "轮次",
-            "Codex 主动问题焦点",
-            "用户回答摘要",
-            "新增差异维度",
-            "关联候选方向",
-            "趋同判断",
-        }
+        required_columns = {"轮次", "问题焦点", "用户信号", "方向变化", "关键未知", "下一步"}
         rows = next(
             (
                 table_rows
@@ -1344,7 +1276,7 @@ class WorkspaceValidator:
                 "ERROR",
                 "RESEARCH_BRAINSTORM_TABLE_MISSING",
                 "RESEARCH.md",
-                "research contract must contain the Codex-led brainstorming table",
+                "research contract must contain the compact interaction log",
             )
             return
         if phase_one_state not in VALID_PHASE_ONE_STATES:
@@ -1366,7 +1298,7 @@ class WorkspaceValidator:
                 "ERROR",
                 "RESEARCH_BRAINSTORM_RECORD_MISSING",
                 "RESEARCH.md",
-                "SEARCH requires at least one recorded Codex-led brainstorming round",
+                    "SEARCH requires at least one recorded direction-forming interaction",
             )
         for row in real_rows:
             missing = [
@@ -1382,28 +1314,13 @@ class WorkspaceValidator:
                     "RESEARCH.md",
                     f"brainstorm round is missing: {', '.join(sorted(missing))}",
                 )
-            if row.get("趋同判断") not in {"有新差异", "趋同"}:
-                self.add(
-                    "ERROR",
-                    "RESEARCH_BRAINSTORM_CONVERGENCE_INVALID",
-                    "RESEARCH.md",
-                    "brainstorm convergence must be 有新差异 or 趋同",
-                )
-        conclusion = self.extract_field(text, "发散结论") or ""
-        more_ideas = self.extract_field(text, "用户是否还有更多想法") or ""
-        if conclusion in PLACEHOLDER_CELLS or conclusion.startswith("TODO"):
+        alternative_check = self.extract_field(text, "替代方向检查") or ""
+        if alternative_check in PLACEHOLDER_CELLS or alternative_check.startswith(("TODO", "待进行")):
             self.add(
                 "ERROR",
-                "RESEARCH_BRAINSTORM_CONCLUSION_MISSING",
+                "RESEARCH_ALTERNATIVE_DIRECTION_CHECK_MISSING",
                 "RESEARCH.md",
-                "SEARCH requires a recorded divergence conclusion",
-            )
-        if not more_ideas.startswith("暂无"):
-            self.add(
-                "ERROR",
-                "RESEARCH_BRAINSTORM_USER_EXIT_MISSING",
-                "RESEARCH.md",
-                "SEARCH requires the user to indicate there are temporarily no more ideas",
+                "SEARCH requires an explicit substantive-alternative check",
             )
 
     def check_candidate_directions(
@@ -1413,20 +1330,16 @@ class WorkspaceValidator:
         transition_ready: bool,
         definitions: dict[str, set[str]],
     ) -> None:
-        """Require multiple compared candidates and one final direction."""
+        """Require one or more real shortlisted directions and one final direction."""
 
         required_columns = {
             "候选方向 ID",
             "核心问题",
-            "研究价值",
-            "创新性风险",
-            "数据需求",
-            "计算成本",
-            "验证难度",
-            "预计交付物",
-            "关联研究问题 ID",
+            "创新性假设",
+            "最小验证路径",
+            "主要风险",
             "状态",
-            "选择或否决理由",
+            "选择、合并或否决理由",
             "决策 ID",
         }
         rows = next(
@@ -1442,7 +1355,7 @@ class WorkspaceValidator:
                 "ERROR",
                 "RESEARCH_DIRECTION_TABLE_MISSING",
                 "RESEARCH.md",
-                "legacy contract must add the multi-candidate direction comparison table",
+                "research contract must contain the formal shortlisted-direction table",
             )
             return
 
@@ -1471,22 +1384,19 @@ class WorkspaceValidator:
         )
         if not comparison_required:
             return
-        if len(real_rows) < 2:
+        if not real_rows:
             self.add(
                 "ERROR",
                 "RESEARCH_DIRECTION_CANDIDATES_INSUFFICIENT",
                 "RESEARCH.md",
-                "at least two substantively different candidate directions are required before SEARCH",
+                "at least one formal shortlisted direction is required before SEARCH",
             )
 
         comparison_columns = (
             "核心问题",
-            "研究价值",
-            "创新性风险",
-            "数据需求",
-            "计算成本",
-            "验证难度",
-            "预计交付物",
+            "创新性假设",
+            "最小验证路径",
+            "主要风险",
         )
         signatures: set[tuple[str, ...]] = set()
         for row in real_rows:
@@ -1530,14 +1440,14 @@ class WorkspaceValidator:
             )
         for row in real_rows:
             direction_id = row.get("候选方向 ID", "direction")
-            if row.get("状态") not in {"已选定", "已否决"}:
+            if row.get("状态") not in {"已选定", "已否决", "已合并"}:
                 self.add(
                     "ERROR",
                     "RESEARCH_DIRECTION_UNRESOLVED",
                     "RESEARCH.md",
                     f"{direction_id} remains a candidate after final direction selection",
                 )
-            reason = row.get("选择或否决理由", "")
+            reason = row.get("选择、合并或否决理由", "")
             if reason in PLACEHOLDER_CELLS or reason.startswith("TODO"):
                 self.add(
                     "ERROR",
@@ -1551,15 +1461,6 @@ class WorkspaceValidator:
                     "RESEARCH_DIRECTION_DECISION_MISSING",
                     "RESEARCH.md",
                     f"{direction_id} has no DEC-<nnn> decision reference",
-                )
-        if selected:
-            rq_id = selected[0].get("关联研究问题 ID", "")
-            if rq_id not in definitions.get("研究问题 ID", set()):
-                self.add(
-                    "ERROR",
-                    "RESEARCH_DIRECTION_QUESTION_MISSING",
-                    "RESEARCH.md",
-                    "the selected direction must reference a defined research question",
                 )
 
     def check_transition_history(
@@ -1701,21 +1602,13 @@ class WorkspaceValidator:
         """Check that a new session can resume without the chat transcript."""
 
         labels = (
-            "最近交接日期或轮次",
+            "最近轮次",
             "当前全局阶段",
             "当前阶段一子状态",
-            "当前候选方向",
-            "当前唯一选定方向",
-            "头脑风暴状态",
-            "最新趋同判断",
-            "用户是否还有更多想法",
-            "本轮已确认事项",
-            "本轮否决方案",
-            "当前暂定假设",
-            "新增证据",
-            "未解决问题",
-            "下一轮首要任务",
-            "不应重新采用的旧方案",
+            "当前工作方向",
+            "替代方向检查",
+            "关键未知",
+            "下一步",
         )
         missing = [
             label
@@ -1755,50 +1648,6 @@ class WorkspaceValidator:
                 "session recovery substate conflicts with the canonical phase-one state",
             )
 
-        direction_rows = [
-            row
-            for headers, rows in self.parse_markdown_tables(text)
-            if "候选方向 ID" in headers and "状态" in headers
-            for row in rows
-            if re.fullmatch(r"DIR-\d{3}", row.get("候选方向 ID", ""))
-        ]
-        recovery_candidates = self.extract_field(text, "当前候选方向") or ""
-        recovery_selected = self.extract_field(text, "当前唯一选定方向") or ""
-        real_ids = {row.get("候选方向 ID", "") for row in direction_rows}
-        selected_ids = {
-            row.get("候选方向 ID", "")
-            for row in direction_rows
-            if row.get("状态") == "已选定"
-        }
-        if real_ids and recovery_candidates.startswith("无"):
-            self.add(
-                "ERROR",
-                "RESEARCH_RECOVERY_DIRECTION_CONFLICT",
-                "RESEARCH.md",
-                "session recovery says there are no candidates but direction records exist",
-            )
-        if not real_ids and re.search(r"DIR-\d{3}", recovery_candidates):
-            self.add(
-                "ERROR",
-                "RESEARCH_RECOVERY_DIRECTION_CONFLICT",
-                "RESEARCH.md",
-                "session recovery references candidate directions absent from the contract",
-            )
-        if selected_ids and not selected_ids.issubset(set(re.findall(r"DIR-\d{3}", recovery_selected))):
-            self.add(
-                "ERROR",
-                "RESEARCH_RECOVERY_SELECTION_CONFLICT",
-                "RESEARCH.md",
-                "session recovery selected direction conflicts with the direction table",
-            )
-        if not selected_ids and re.search(r"DIR-\d{3}", recovery_selected):
-            self.add(
-                "ERROR",
-                "RESEARCH_RECOVERY_SELECTION_CONFLICT",
-                "RESEARCH.md",
-                "session recovery claims a selected direction when none is selected",
-            )
-
     def check_research_contract_quality(
         self,
         text: str,
@@ -1817,8 +1666,8 @@ class WorkspaceValidator:
                 f"research contract is large ({line_count} lines, {byte_count} bytes); move detailed process into research/",
             )
 
-        external_api = self.extract_field(text, "外部模型 API") or ""
-        transfer = self.extract_field(text, "外部 API 传输") or ""
+        external_api = self.extract_field(text, "计算与外部服务") or ""
+        transfer = self.extract_field(text, "外部传输") or ""
         external_api_is_explicit = (
             external_api not in PLACEHOLDER_CELLS
             and not external_api.startswith(("TODO", "不适用"))
@@ -1887,7 +1736,7 @@ class WorkspaceValidator:
             if value is None or value in PLACEHOLDER_CELLS or value.startswith("TODO"):
                 self.add(
                     "ERROR",
-                    "RESEARCH_STAGE_TWO_RESOURCE_FIELD_MISSING",
+                    "RESEARCH_STAGE_TWO_STOP_RULE_MISSING",
                     "RESEARCH.md",
                     f"{label} must be explicit before stage two",
                 )
@@ -1899,55 +1748,15 @@ class WorkspaceValidator:
                     f"{label} is not applicable but has no explicit reason",
                 )
 
-        if external_api.startswith("不适用"):
-            if not self.has_not_applicable_reason(external_api):
-                self.add(
-                    "ERROR",
-                    "RESEARCH_NOT_APPLICABLE_REASON_MISSING",
-                    "RESEARCH.md",
-                    "external API is not applicable but has no explicit reason",
-                )
-        else:
-            for label in ("API 用途", "API 模型", "API 与 GPU 分工及数据流"):
-                value = self.extract_field(text, label)
-                if value is None or value in PLACEHOLDER_CELLS or value.startswith("TODO"):
-                    self.add(
-                        "ERROR",
-                        "RESEARCH_API_FLOW_FIELD_MISSING",
-                        "RESEARCH.md",
-                        f"{label} must be explicit when an external API is planned",
-                    )
-            if not any(word in transfer for word in ("允许", "不允许")):
-                self.add(
-                    "ERROR",
-                    "RESEARCH_API_TRANSFER_UNCLEAR",
-                    "RESEARCH.md",
-                    "external API transfer must explicitly state allowed or not allowed",
-                )
-
-        gpu_purpose = self.extract_field(text, "GPU 用途") or ""
-        if gpu_purpose.startswith("不适用"):
-            if not self.has_not_applicable_reason(gpu_purpose):
-                self.add(
-                    "ERROR",
-                    "RESEARCH_NOT_APPLICABLE_REASON_MISSING",
-                    "RESEARCH.md",
-                    "GPU use is not applicable but has no explicit reason",
-                )
-        else:
-            local_resources = self.extract_field(text, "本地计算资源") or ""
-            if (
-                gpu_purpose in PLACEHOLDER_CELLS
-                or gpu_purpose.startswith("TODO")
-                or local_resources in PLACEHOLDER_CELLS
-                or local_resources.startswith("TODO")
-            ):
-                self.add(
-                    "ERROR",
-                    "RESEARCH_GPU_FLOW_FIELD_MISSING",
-                    "RESEARCH.md",
-                    "GPU purpose and local resource details must be explicit when GPU use is planned",
-                )
+        if external_api_is_explicit and "API" in external_api and not any(
+            word in transfer for word in ("允许", "不允许")
+        ):
+            self.add(
+                "ERROR",
+                "RESEARCH_API_TRANSFER_UNCLEAR",
+                "RESEARCH.md",
+                "planned external API use must explicitly state whether data transfer is allowed",
+            )
 
     def check_contract_relations(
         self,
@@ -2207,10 +2016,6 @@ class WorkspaceValidator:
     ) -> None:
         """Validate phase-one search, source, claim, and decision evidence."""
 
-        transition_ready = phase in {
-            "阶段二：实验与分析",
-            "阶段三：论文写作",
-        } or status == "已完成"
         research_path = self.root / "RESEARCH.md"
         research_text = (
             research_path.read_text(encoding="utf-8")
@@ -2222,22 +2027,15 @@ class WorkspaceValidator:
         phase_one_state = phase_one_state_override or self.extract_field(
             research_text, "阶段一子状态"
         )
+        transition_ready = phase_one_state == "GATE_CHECK" or phase in {
+            "阶段二：实验与分析",
+            "阶段三：论文写作",
+        } or status == "已完成"
         search_required = (
             phase_one_state in VALID_PHASE_ONE_STATES
             and PHASE_ONE_STATE_ORDER.index(phase_one_state)
             >= PHASE_ONE_STATE_ORDER.index("SEARCH")
         ) or transition_ready
-        brainstorm_started = any(
-            "轮次" in headers
-            and "Codex 主动问题焦点" in headers
-            and any(
-                row.get("轮次", "") not in PLACEHOLDER_CELLS
-                and not row.get("轮次", "").startswith("TODO")
-                for row in rows
-            )
-            for headers, rows in research_tables
-        )
-        resource_required = search_required or brainstorm_started
 
         sources = self.read_flat_yaml_registry(
             "research/sources.yaml", "sources", "source_id"
@@ -2251,12 +2049,9 @@ class WorkspaceValidator:
         coverage = self.read_flat_yaml_registry(
             "research/search_coverage.yaml", "direction_coverage", "direction_id"
         )
-        resources = self.read_flat_yaml_registry(
-            "research/resources.yaml", "snapshots", "resource_id"
-        )
         if any(
             registry is None
-            for registry in (sources, claims, decisions, coverage, resources)
+            for registry in (sources, claims, decisions, coverage)
         ):
             return
 
@@ -2287,6 +2082,13 @@ class WorkspaceValidator:
             for entry in search_entries
             if isinstance(entry.get("query_id"), str)
         }
+        selected_direction_ids = {
+            row.get("候选方向 ID", "")
+            for headers, rows in research_tables
+            if {"候选方向 ID", "状态"}.issubset(headers)
+            for row in rows
+            if row.get("状态") == "已选定"
+        }
         self.validate_search_coverage(
             coverage,
             contract_ids.get("候选方向 ID", set()),
@@ -2295,12 +2097,7 @@ class WorkspaceValidator:
             source_ids,
             search_required,
             transition_ready,
-        )
-        self.validate_phase_one_resources(
-            resources,
-            search_entries,
-            claims,
-            resource_required,
+            selected_direction_ids,
         )
         self.check_phase_one_evidence_quality(
             sources,
@@ -3314,46 +3111,6 @@ class WorkspaceValidator:
                     relative,
                     f"{query_id} citation_tracking must be boolean",
                 )
-            returned_size = entry.get("returned_content_size")
-            returned_unit = entry.get("returned_content_unit")
-            if returned_unit not in VALID_RETURN_SIZE_UNITS:
-                self.add(
-                    "ERROR",
-                    "RESEARCH_QUERY_RETURN_UNIT_INVALID",
-                    relative,
-                    f"{query_id} returned_content_unit is invalid",
-                )
-            if returned_size is not None and (
-                not isinstance(returned_size, int)
-                or isinstance(returned_size, bool)
-                or returned_size < 0
-            ):
-                self.add(
-                    "ERROR",
-                    "RESEARCH_QUERY_RETURN_SIZE_INVALID",
-                    relative,
-                    f"{query_id} returned_content_size must be non-negative or null",
-                )
-            if (returned_size is None) != (returned_unit == "unavailable"):
-                self.add(
-                    "ERROR",
-                    "RESEARCH_QUERY_RETURN_SIZE_UNIT_MISMATCH",
-                    relative,
-                    f"{query_id} return size and unit must consistently represent unavailable data",
-                )
-            for numeric_field in ("page_count", "external_tool_calls"):
-                numeric_value = entry.get(numeric_field)
-                if numeric_value is not None and (
-                    not isinstance(numeric_value, int)
-                    or isinstance(numeric_value, bool)
-                    or numeric_value < 0
-                ):
-                    self.add(
-                        "ERROR",
-                        "RESEARCH_QUERY_RESOURCE_VALUE_INVALID",
-                        relative,
-                        f"{query_id} {numeric_field} must be non-negative or null",
-                    )
             superseded = entry.get("supersedes_query_id")
             if superseded is not None and not re.fullmatch(
                 r"QRY-\d{3,}", str(superseded)
@@ -3375,10 +3132,12 @@ class WorkspaceValidator:
         source_ids: set[str],
         search_required: bool,
         transition_ready: bool,
+        selected_direction_ids: set[str] | None = None,
     ) -> set[str]:
         """Validate per-direction search breadth and observable stop proxies."""
 
         relative = "research/search_coverage.yaml"
+        selected_direction_ids = selected_direction_ids or set()
         covered_direction_ids: set[str] = set()
         for entry in entries:
             missing = sorted(SEARCH_COVERAGE_REQUIRED_FIELDS - entry.keys())
@@ -3416,6 +3175,14 @@ class WorkspaceValidator:
                     "RESEARCH_SEARCH_COVERAGE_DIRECTION_UNRESOLVED",
                     relative,
                     f"{direction_id} is not defined in RESEARCH.md",
+                )
+            stop_type = entry.get("stop_type")
+            if stop_type not in VALID_SEARCH_STOP_TYPES:
+                self.add(
+                    "ERROR",
+                    "RESEARCH_SEARCH_STOP_TYPE_INVALID",
+                    relative,
+                    f"{direction_id} stop_type must be 证据饱和 or 可行性阻断",
                 )
             coverage_rqs = self.require_id_list(
                 relative,
@@ -3495,7 +3262,14 @@ class WorkspaceValidator:
                     direction_id,
                     entry,
                     field,
-                    allow_empty=field == "uncovered_scope" or not search_required,
+                    allow_empty=(
+                        field == "uncovered_scope"
+                        or not search_required
+                        or (
+                            stop_type == "可行性阻断"
+                            and field in {"covered_languages", "covered_platforms"}
+                        )
+                    ),
                 )
             citation_sources = self.require_id_list(
                 relative,
@@ -3512,6 +3286,41 @@ class WorkspaceValidator:
                     relative,
                     f"{direction_id} citation tracking references undefined {source_id}",
                 )
+            blocking_sources = self.require_id_list(
+                relative,
+                direction_id,
+                entry,
+                "blocking_source_ids",
+                re.compile(r"SRC-\d{3}"),
+                allow_empty=stop_type != "可行性阻断",
+            )
+            for source_id in sorted(blocking_sources - source_ids):
+                self.add(
+                    "ERROR",
+                    "RESEARCH_SEARCH_BLOCKING_SOURCE_UNRESOLVED",
+                    relative,
+                    f"{direction_id} blocking evidence references undefined {source_id}",
+                )
+            blocking_issue = entry.get("blocking_issue")
+            if stop_type == "可行性阻断" and (
+                not isinstance(blocking_issue, str) or not blocking_issue.strip()
+            ):
+                self.add(
+                    "ERROR",
+                    "RESEARCH_SEARCH_BLOCKING_ISSUE_MISSING",
+                    relative,
+                    f"{direction_id} feasibility blocker must describe the blocking issue",
+                )
+            if stop_type == "证据饱和" and (
+                (blocking_issue is not None and blocking_issue != "")
+                or blocking_sources
+            ):
+                self.add(
+                    "ERROR",
+                    "RESEARCH_SEARCH_SATURATION_BLOCKER_CONFLICT",
+                    relative,
+                    f"{direction_id} cannot record blocking evidence when stop_type is 证据饱和",
+                )
             def string_values(field: str) -> set[str]:
                 value = entry.get(field)
                 return (
@@ -3525,14 +3334,14 @@ class WorkspaceValidator:
             covered_languages = string_values("covered_languages")
             planned_platforms = string_values("planned_platforms")
             covered_platforms = string_values("covered_platforms")
-            if not planned_languages.issubset(covered_languages):
+            if stop_type != "可行性阻断" and not planned_languages.issubset(covered_languages):
                 self.add(
                     "ERROR",
                     "RESEARCH_SEARCH_LANGUAGE_SCOPE_INCOMPLETE",
                     relative,
                     f"{direction_id} has not covered every planned language",
                 )
-            if not planned_platforms.issubset(covered_platforms):
+            if stop_type != "可行性阻断" and not planned_platforms.issubset(covered_platforms):
                 self.add(
                     "ERROR",
                     "RESEARCH_SEARCH_PLATFORM_SCOPE_INCOMPLETE",
@@ -3595,41 +3404,6 @@ class WorkspaceValidator:
                 )
             stopped = stop_status == "已停止"
             if stopped:
-                if len(yield_history) < 2 or yield_history[-1] >= yield_history[0]:
-                    self.add(
-                        "ERROR",
-                        "RESEARCH_SEARCH_STOP_YIELD_UNSUPPORTED",
-                        relative,
-                        f"{direction_id} lacks an observed decline in independent-source yield",
-                    )
-                if not method_history or method_history[-1] != 0:
-                    self.add(
-                        "ERROR",
-                        "RESEARCH_SEARCH_STOP_METHODS_UNSATURATED",
-                        relative,
-                        f"{direction_id} latest query batch still adds a method category",
-                    )
-                if any(value not in {"已覆盖", "不适用"} for value in coverage.values()):
-                    self.add(
-                        "ERROR",
-                        "RESEARCH_SEARCH_STOP_COVERAGE_INCOMPLETE",
-                        relative,
-                        f"{direction_id} stopped with incomplete search categories",
-                    )
-                if not all(
-                    entry.get(field) is True
-                    for field in (
-                        "key_questions_covered",
-                        "counterevidence_completed",
-                        "citation_tracking_completed",
-                    )
-                ):
-                    self.add(
-                        "ERROR",
-                        "RESEARCH_SEARCH_STOP_PROXY_INCOMPLETE",
-                        relative,
-                        f"{direction_id} stopped before all observable proxies were met",
-                    )
                 stop_reason = str(entry.get("stop_reason", "")).strip()
                 if not stop_reason or re.search(r"完全检索|穷尽所有|全部文献", stop_reason):
                     self.add(
@@ -3638,6 +3412,58 @@ class WorkspaceValidator:
                         relative,
                         f"{direction_id} must use observable stop reasons rather than completeness claims",
                     )
+                if stop_type == "证据饱和":
+                    if len(yield_history) < 2 or yield_history[-1] >= yield_history[0]:
+                        self.add(
+                            "ERROR",
+                            "RESEARCH_SEARCH_STOP_YIELD_UNSUPPORTED",
+                            relative,
+                            f"{direction_id} lacks an observed decline in independent-source yield",
+                        )
+                    if not method_history or method_history[-1] != 0:
+                        self.add(
+                            "ERROR",
+                            "RESEARCH_SEARCH_STOP_METHODS_UNSATURATED",
+                            relative,
+                            f"{direction_id} latest query batch still adds a method category",
+                        )
+                    if any(value not in {"已覆盖", "不适用"} for value in coverage.values()):
+                        self.add(
+                            "ERROR",
+                            "RESEARCH_SEARCH_STOP_COVERAGE_INCOMPLETE",
+                            relative,
+                            f"{direction_id} stopped with incomplete search categories",
+                        )
+                    if not all(
+                        entry.get(field) is True
+                        for field in (
+                            "key_questions_covered",
+                            "counterevidence_completed",
+                            "citation_tracking_completed",
+                        )
+                    ):
+                        self.add(
+                            "ERROR",
+                            "RESEARCH_SEARCH_STOP_PROXY_INCOMPLETE",
+                            relative,
+                            f"{direction_id} stopped before all observable proxies were met",
+                        )
+                elif stop_type == "可行性阻断":
+                    uncovered_scope = entry.get("uncovered_scope")
+                    if not isinstance(uncovered_scope, list) or not uncovered_scope:
+                        self.add(
+                            "ERROR",
+                            "RESEARCH_SEARCH_BLOCKING_SCOPE_MISSING",
+                            relative,
+                            f"{direction_id} feasibility blocker must disclose the uncovered scope",
+                        )
+                    if direction_id in selected_direction_ids:
+                        self.add(
+                            "ERROR",
+                            "RESEARCH_SELECTED_DIRECTION_SEARCH_BLOCKED",
+                            relative,
+                            f"{direction_id} is selected but its search stopped on a feasibility blocker",
+                        )
             if transition_ready and not stopped:
                 self.add(
                     "ERROR",
@@ -3654,227 +3480,6 @@ class WorkspaceValidator:
                     f"{direction_id} has no search coverage record",
                 )
         return covered_direction_ids
-
-    def validate_phase_one_resources(
-        self,
-        entries: list[dict[str, object]],
-        search_entries: list[dict[str, object]],
-        claims: list[dict[str, object]],
-        search_required: bool,
-    ) -> None:
-        """Validate phase-one usage metrics without enforcing fixed quotas."""
-
-        relative = "research/resources.yaml"
-        current_entries: list[dict[str, object]] = []
-        resource_ids: set[str] = set()
-        for entry in entries:
-            missing = sorted(RESOURCE_REQUIRED_FIELDS - entry.keys())
-            if missing:
-                self.add(
-                    "ERROR",
-                    "RESEARCH_RESOURCE_FIELDS_MISSING",
-                    relative,
-                    f"resource snapshot is missing: {', '.join(missing)}",
-                )
-            self.reject_credential_fields(relative, entry)
-            resource_id = entry.get("resource_id")
-            if not isinstance(resource_id, str) or not re.fullmatch(
-                r"RES-\d{3}", resource_id
-            ):
-                self.add(
-                    "ERROR",
-                    "RESEARCH_RESOURCE_ID_INVALID",
-                    relative,
-                    "resource_id must match RES-<nnn>",
-                )
-                continue
-            if resource_id in resource_ids:
-                self.add(
-                    "ERROR",
-                    "RESEARCH_RESOURCE_ID_DUPLICATE",
-                    relative,
-                    f"{resource_id} is defined more than once",
-                )
-            resource_ids.add(resource_id)
-            if entry.get("status") not in VALID_RESOURCE_STATUSES:
-                self.add(
-                    "ERROR",
-                    "RESEARCH_RESOURCE_STATUS_INVALID",
-                    relative,
-                    f"{resource_id} has an invalid status",
-                )
-            elif entry.get("status") == "当前":
-                current_entries.append(entry)
-            if not isinstance(entry.get("recorded_at"), str) or not str(
-                entry.get("recorded_at")
-            ).strip():
-                self.add(
-                    "ERROR",
-                    "RESEARCH_RESOURCE_DATE_MISSING",
-                    relative,
-                    f"{resource_id} recorded_at must be explicit",
-                )
-            usage_fields = (
-                "brainstorm_input_tokens",
-                "brainstorm_output_tokens",
-                "brainstorm_total_tokens",
-                "input_tokens",
-                "output_tokens",
-                "total_tokens",
-                "search_return_size",
-                "search_queries",
-                "search_pages",
-                "external_tool_calls",
-                "api_calls",
-                "elapsed_seconds",
-                "estimated_cost",
-                "evidence_file_bytes",
-                "claim_count",
-                "context_compactions",
-            )
-            unavailable = entry.get("unavailable_metrics")
-            if not isinstance(unavailable, list) or not all(
-                isinstance(item, str) and ":" in item for item in unavailable
-            ):
-                self.add(
-                    "ERROR",
-                    "RESEARCH_RESOURCE_UNAVAILABLE_METRICS_INVALID",
-                    relative,
-                    f"{resource_id} unavailable_metrics must use field: reason strings",
-                )
-                unavailable_names: set[str] = set()
-            else:
-                unavailable_names = {item.split(":", 1)[0] for item in unavailable}
-            for field in usage_fields:
-                value = entry.get(field)
-                if value is None:
-                    if field not in unavailable_names:
-                        self.add(
-                            "ERROR",
-                            "RESEARCH_RESOURCE_NULL_REASON_MISSING",
-                            relative,
-                            f"{resource_id} {field} is null without an unavailable reason",
-                        )
-                elif (
-                    not isinstance(value, (int, float))
-                    or isinstance(value, bool)
-                    or value < 0
-                ):
-                    self.add(
-                        "ERROR",
-                        "RESEARCH_RESOURCE_USAGE_INVALID",
-                        relative,
-                        f"{resource_id} {field} must be non-negative or null",
-                    )
-            self.validate_token_totals(entry, resource_id, relative)
-            if entry.get("search_return_unit") not in VALID_RETURN_SIZE_UNITS:
-                self.add(
-                    "ERROR",
-                    "RESEARCH_RESOURCE_RETURN_UNIT_INVALID",
-                    relative,
-                    f"{resource_id} search_return_unit is invalid",
-                )
-            self.require_nonempty_string_fields(
-                relative, resource_id, entry, ("cost_currency",)
-            )
-        if search_required and len(current_entries) != 1:
-            self.add(
-                "ERROR",
-                "RESEARCH_RESOURCE_CURRENT_SNAPSHOT_INVALID",
-                relative,
-                "exactly one current phase-one resource snapshot is required before SEARCH",
-            )
-        if not current_entries:
-            return
-        current = current_entries[0]
-
-        if current.get("search_queries") != len(search_entries):
-            self.add(
-                "WARN",
-                "RESEARCH_RESOURCE_QUERY_COUNT_MISMATCH",
-                relative,
-                "resource search_queries does not match parsed search-log entries",
-            )
-        if current.get("claim_count") != len(claims):
-            self.add(
-                "WARN",
-                "RESEARCH_RESOURCE_CLAIM_COUNT_MISMATCH",
-                relative,
-                "resource claim_count does not match claims.yaml",
-            )
-        evidence_bytes = self.phase_one_evidence_bytes()
-        recorded_bytes = current.get("evidence_file_bytes")
-        if isinstance(recorded_bytes, (int, float)) and recorded_bytes != evidence_bytes:
-            self.add(
-                "WARN",
-                "RESEARCH_RESOURCE_EVIDENCE_BYTES_MISMATCH",
-                relative,
-                "recorded evidence_file_bytes does not match current evidence files",
-            )
-
-    def validate_token_totals(
-        self, entry: dict[str, object], resource_id: str, relative: str
-    ) -> None:
-        """Check phase-one and brainstorm token totals when counts are available."""
-
-        groups = (
-            ("input_tokens", "output_tokens", "total_tokens", "phase one"),
-            (
-                "brainstorm_input_tokens",
-                "brainstorm_output_tokens",
-                "brainstorm_total_tokens",
-                "brainstorm",
-            ),
-        )
-        for input_field, output_field, total_field, label in groups:
-            input_value = entry.get(input_field)
-            output_value = entry.get(output_field)
-            total_value = entry.get(total_field)
-            if all(
-                isinstance(value, (int, float)) and not isinstance(value, bool)
-                for value in (input_value, output_value, total_value)
-            ) and total_value != input_value + output_value:
-                self.add(
-                    "ERROR",
-                    "RESEARCH_RESOURCE_TOKEN_TOTAL_MISMATCH",
-                    relative,
-                    f"{resource_id} {label} total tokens must equal input plus output",
-                )
-        brainstorm_total = entry.get("brainstorm_total_tokens")
-        phase_total = entry.get("total_tokens")
-        if (
-            isinstance(brainstorm_total, (int, float))
-            and not isinstance(brainstorm_total, bool)
-            and isinstance(phase_total, (int, float))
-            and not isinstance(phase_total, bool)
-            and brainstorm_total > phase_total
-        ):
-            self.add(
-                "ERROR",
-                "RESEARCH_RESOURCE_BRAINSTORM_TOKEN_EXCEEDS_TOTAL",
-                relative,
-                f"{resource_id} brainstorm tokens cannot exceed total phase-one tokens",
-            )
-
-    def phase_one_evidence_bytes(self) -> int:
-        """Return bytes of committable phase-one evidence, excluding local-only stores."""
-
-        research_root = self.root / "research"
-        if not research_root.is_dir():
-            return 0
-        total = 0
-        for path in research_root.rglob("*"):
-            if not path.is_file() or path.name == "README.md":
-                continue
-            relative_parts = path.relative_to(research_root).parts
-            if relative_parts and relative_parts[0] in {
-                "private",
-                "raw",
-                "source_files",
-            }:
-                continue
-            total += path.stat().st_size
-        return total
 
     def check_phase_one_evidence_quality(
         self,
@@ -4537,9 +4142,6 @@ class WorkspaceValidator:
                 "failures",
                 "retries",
                 "rate_limits",
-                "input_tokens",
-                "output_tokens",
-                "total_tokens",
                 "elapsed_seconds",
                 "estimated_cost",
                 "cost_currency",
@@ -4551,20 +4153,7 @@ class WorkspaceValidator:
                     "ERROR",
                     "RUN_API_USAGE_MISSING",
                     relative,
-                    "API metrics must record calls, outcomes, retries, tokens, time, and cost",
-                )
-            elif all(
-                isinstance(api_metrics.get(field), int)
-                and not isinstance(api_metrics.get(field), bool)
-                for field in ("input_tokens", "output_tokens", "total_tokens")
-            ) and api_metrics["total_tokens"] != (
-                api_metrics["input_tokens"] + api_metrics["output_tokens"]
-            ):
-                self.add(
-                    "ERROR",
-                    "RUN_API_TOKEN_TOTAL_MISMATCH",
-                    relative,
-                    "API total_tokens must equal input_tokens plus output_tokens",
+                    "API metrics must record calls, outcomes, retries, time, and cost",
                 )
 
     def check_experiment_reconciliation(self) -> None:
@@ -4870,7 +4459,13 @@ class WorkspaceValidator:
                         relative,
                         "failed task must record its failure reason",
                     )
-                self.validate_task_token_resources(status, relative)
+                if not isinstance(status.get("resources"), dict):
+                    self.add(
+                        "ERROR",
+                        "TASK_RESOURCES_INVALID",
+                        relative,
+                        "task status must contain a resources object",
+                    )
                 completed = status.get("completed")
                 total = status.get("total")
                 if not isinstance(completed, int) or completed < 0:
@@ -4960,107 +4555,6 @@ class WorkspaceValidator:
                             relative,
                             f"events.jsonl line {line_number} has the wrong task_run_id",
                         )
-
-    def validate_task_token_resources(
-        self, status: dict[str, object], relative: str
-    ) -> None:
-        """Validate Codex-session and experiment-API token accounting."""
-
-        resources = status.get("resources")
-        if not isinstance(resources, dict):
-            self.add(
-                "ERROR",
-                "TASK_RESOURCES_INVALID",
-                relative,
-                "task status must contain a resources object",
-            )
-            return
-        token_fields = (
-            "input_tokens",
-            "output_tokens",
-            "total_tokens",
-            "api_input_tokens",
-            "api_output_tokens",
-            "api_total_tokens",
-            "token_unavailable_reasons",
-        )
-        missing = [field for field in token_fields if field not in resources]
-        if missing:
-            self.add(
-                "ERROR",
-                "TASK_TOKEN_FIELDS_MISSING",
-                relative,
-                f"task resources are missing: {', '.join(missing)}",
-            )
-        for field in token_fields[:-1]:
-            value = resources.get(field)
-            if value is not None and (
-                not isinstance(value, int) or isinstance(value, bool) or value < 0
-            ):
-                self.add(
-                    "ERROR",
-                    "TASK_TOKEN_VALUE_INVALID",
-                    relative,
-                    f"{field} must be a non-negative integer or null",
-                )
-        reasons = resources.get("token_unavailable_reasons")
-        if not isinstance(reasons, list) or not all(
-            isinstance(reason, str) and ":" in reason for reason in reasons
-        ):
-            self.add(
-                "ERROR",
-                "TASK_TOKEN_UNAVAILABLE_REASONS_INVALID",
-                relative,
-                "token_unavailable_reasons must use field: reason strings",
-            )
-            unavailable_names: set[str] = set()
-        else:
-            unavailable_names = {reason.split(":", 1)[0] for reason in reasons}
-        for input_field, output_field, total_field in (
-            ("input_tokens", "output_tokens", "total_tokens"),
-            ("api_input_tokens", "api_output_tokens", "api_total_tokens"),
-        ):
-            input_value = resources.get(input_field)
-            output_value = resources.get(output_field)
-            total_value = resources.get(total_field)
-            if (
-                isinstance(input_value, int)
-                and not isinstance(input_value, bool)
-                and isinstance(output_value, int)
-                and not isinstance(output_value, bool)
-                and total_value != input_value + output_value
-            ):
-                self.add(
-                    "ERROR",
-                    "TASK_TOKEN_TOTAL_MISMATCH",
-                    relative,
-                    f"{total_field} must equal input plus output tokens",
-                )
-        if status.get("status") != "success":
-            return
-        if status.get("stage") == "stage_three" and resources.get(
-            "total_tokens"
-        ) is None and "total_tokens" not in unavailable_names:
-            self.add(
-                "ERROR",
-                "STAGE_THREE_TOKEN_TOTAL_MISSING",
-                relative,
-                "successful writing session must record total_tokens or an unavailable reason",
-            )
-        api_calls = resources.get("api_calls")
-        if (
-            status.get("stage") == "stage_two"
-            and isinstance(api_calls, int)
-            and api_calls > 0
-            and resources.get("api_total_tokens") is None
-            and "api_total_tokens" not in unavailable_names
-        ):
-            self.add(
-                "ERROR",
-                "STAGE_TWO_API_TOKEN_TOTAL_MISSING",
-                relative,
-                "API-using experiment task must record api_total_tokens or an unavailable reason",
-            )
 
     def check_stage_two_handoff(self, *, required: bool) -> None:
         """Require a reconciled evidence handoff before stage three."""

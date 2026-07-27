@@ -14,7 +14,6 @@ research/
 ├── sources.yaml       # 正式来源元数据，使用 SRC-<nnn>
 ├── claims.yaml        # 最小事实主张与证据关系，使用 CLM-<nnn>
 ├── decisions.yaml     # 研究决策与支撑链，使用 DEC-<nnn>
-├── resources.yaml     # 阶段一累计资源计量快照
 ├── archive/           # 已封存、不可倒改的搜索日志分片
 └── summaries/         # 按研究问题生成的精简、可回查摘要
 ```
@@ -48,10 +47,6 @@ research/
 | `exclusions` | object[] | 被排除结果的非敏感引用及排除原因；没有时为空数组 |
 | `counterevidence_search` | boolean | 是否以反证、失败、负面结果或相似工作为目标 |
 | `citation_tracking` | boolean | 是否执行向前、向后或等价的引用追踪 |
-| `returned_content_size` | integer/null | 本次返回内容的 token 或字符数；不可得时为 `null` |
-| `returned_content_unit` | string | `tokens`、`characters` 或 `unavailable` |
-| `page_count` | integer/null | 实际检查页面数量；不可得时为 `null` |
-| `external_tool_calls` | integer/null | 本查询产生的外部工具调用次数；不可得时为 `null` |
 
 可选字段：`supersedes_query_id`、`notes`。查询式不得包含个人信息、受限样本、凭据、未获授权的内部标识或可还原敏感内容的长文本。
 
@@ -68,9 +63,9 @@ research/
 - `independent_source_yield_history`：连续批次新增独立来源率；
 - `new_method_categories_history`：连续批次新增方法类别数量；
 - `key_questions_covered`、`counterevidence_completed`、`citation_tracking_completed`；
-- `uncovered_scope`、`stop_reason`、`stop_status`、`last_updated_at`。
+- `uncovered_scope`、`stop_type`、`blocking_issue`、`blocking_source_ids`、`stop_reason`、`stop_status`、`last_updated_at`。
 
-只有覆盖、反证、引用追踪、计划范围和停止代理均满足时才能标记 `已停止`。空数组表示确实没有未覆盖范围；不能用空值表示尚未检查。
+`stop_type` 只使用 `证据饱和` 或 `可行性阻断`。证据饱和需要覆盖、反证、引用追踪、计划范围和饱和代理均满足；此时 `blocking_issue` 为 `null`、`blocking_source_ids` 为空数组。可行性阻断不要求伪造饱和历史，但 `blocking_issue`、至少一个可解析的 `blocking_source_ids` 和非空 `uncovered_scope` 必须完整，且该方向不能成为最终入选方向。空 `uncovered_scope` 只能表示确实没有未覆盖范围；不能用空值表示尚未检查。
 
 ## `sources.yaml`
 
@@ -134,15 +129,9 @@ research/
 
 支撑研究合同的关键主张应尽量具有直接来源；只有部分支持或间接推论时必须保留质量警告和局限。`conflict_status: 存在冲突` 的合同主张阻止阶段一门禁，不能通过多数投票或删除不利来源消除。
 
-## `resources.yaml`
-
-文件顶层包含 `schema_version: 1` 和 `snapshots` 列表，真实快照使用 `RES-<nnn>`。第一次实际头脑风暴问答完成时即建立一个 `status: 当前` 的快照，以便累计头脑风暴 token；进入 `SEARCH` 后继续在同一当前快照累计阶段一总量。阶段压缩、计量口径变化或会话交接需要冻结旧快照时，将旧记录改为 `已归档` 并新建快照。
-
-快照不包含固定 `max_*` 配额、研究周期或“达到上限停止”字段。token 字段区分 `brainstorm_input_tokens`、`brainstorm_output_tokens`、`brainstorm_total_tokens` 与阶段一累计 `input_tokens`、`output_tokens`、`total_tokens`；两个 total 均等于相应输入与输出之和，头脑风暴 total 不得超过阶段一 total。其他使用量字段至少包括搜索返回量及单位、查询和页面数、外部工具/API 调用、耗时、估算费用及币种、证据字节、主张数和上下文压缩次数。不可获得的使用指标写 `null` 并列入 `unavailable_metrics`。这些数据用于复现、审计和异常检查，不决定搜索是否充分；搜索停止依据 `search_coverage.yaml` 中的覆盖、反证和饱和代理。
-
 ## `decisions.yaml`
 
-文件顶层包含 `schema_version: 1` 和 `decisions` 列表。只记录会改变研究目标、候选方向选择、范围、数据、baseline、指标、资源方案、付费/外发授权或阶段状态的持久决策，使用 `DEC-<nnn>`；措辞调整和普通对话不登记。选定最终方向的决策必须把其他 `DIR-<nnn>` 候选及其否决原因分别写入 `alternatives` 和 `rejection_reasons`，不能只记录获选方案。
+文件顶层包含 `schema_version: 1` 和 `decisions` 列表。只记录最终方向、正式候选处置、范围、数据、核心指标、重要方法取舍或阶段状态等持久决策，使用 `DEC-<nnn>`；措辞调整和普通对话不登记。只有存在其他正式 `DIR` 时，最终方向决策才需要在 `alternatives` 和 `rejection_reasons` 中列出它们；单方向压力测试可以使用空数组并在决策说明中记录替代检查结果。
 
 每个决策必须记录：
 
